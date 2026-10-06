@@ -29,12 +29,14 @@
     measurements: ['date'], bodyweight: ['date'], food_entries: ['id'], settings: ['user_id']
   };
   var TABLES = Object.keys(PK);
+  var EX_NEW = ['rep_min', 'rep_max', 'rest_sec', 'default_sets', 'how_to', 'favorite', 'archived', 'image_url'];
   var RAW = {};
   TABLES.forEach(function (t) { RAW[t] = []; });
 
   var D = {
     S: S, client: null, user: null, ready: false, online: navigator.onLine !== false,
-    syncing: false, lastSync: null, lastError: '', onChange: function () {}, onAuth: function () {}
+    syncing: false, lastSync: null, lastError: '', schemaOutdated: false, onChange: function () {}, onAuth: function () {},
+    MIGRATION_SQL: "alter table public.exercises\n  add column if not exists rep_min int,\n  add column if not exists rep_max int,\n  add column if not exists rest_sec int,\n  add column if not exists default_sets int,\n  add column if not exists how_to text not null default '',\n  add column if not exists favorite boolean not null default false,\n  add column if not exists archived boolean not null default false,\n  add column if not exists image_url text;\n\nnotify pgrst, 'reload schema';"
   };
   var outbox = [], pulling = false, needAuth = false;
 
@@ -54,7 +56,7 @@
   var n = function (v) { return v == null ? null : Number(v); };
   function assemble() {
     S.exercises = RAW.exercises.map(function (r) {
-      return { id: r.id, name: r.name, muscle: r.muscle || 'Otro', secondary: r.secondary || [], equipment: r.equipment || null, note: r.note || '', createdAt: r.created_at, updatedAt: r.updated_at };
+      return { id: r.id, name: r.name, muscle: r.muscle || 'Otro', secondary: r.secondary || [], equipment: r.equipment || null, note: r.note || '', repMin: n(r.rep_min), repMax: n(r.rep_max), restSec: n(r.rest_sec), defaultSets: n(r.default_sets), howTo: r.how_to || '', favorite: !!r.favorite, archived: !!r.archived, imageUrl: r.image_url || null, createdAt: r.created_at, updatedAt: r.updated_at };
     }).sort(function (a, b) { return a.name.localeCompare(b.name, 'es'); });
 
     var items = {};
@@ -152,6 +154,12 @@
       var rows = op.rows.map(function (r) { return Object.assign({}, r, { user_id: uid }); });
       var conflict = ['user_id'].concat(PK[op.table]).join(',');
       res = await c.upsert(rows, { onConflict: conflict });
+      if (res && res.error && op.table === 'exercises' && /PGRST204|schema cache|column/i.test((res.error.code || '') + ' ' + (res.error.message || ''))) {
+        // La base de datos aún no tiene las columnas nuevas: se guarda lo básico y se avisa en la app.
+        D.schemaOutdated = true;
+        rows = rows.map(function (r) { var o = Object.assign({}, r); EX_NEW.forEach(function (k) { delete o[k]; }); return o; });
+        res = await c.upsert(rows, { onConflict: conflict });
+      }
     } else if (op.t === 'delete') {
       var q = c.delete(); Object.keys(op.match).forEach(function (k) { q = q.eq(k, op.match[k]); }); res = await q;
     } else {
@@ -205,6 +213,7 @@
       for (var i = 0; i < TABLES.length; i++) fresh[TABLES[i]] = await pullTable(TABLES[i]);
       if (outbox.length) return false; // se registró algo mientras se descargaba
       TABLES.forEach(function (t) { RAW[t] = fresh[t]; });
+      if (fresh.exercises.length) D.schemaOutdated = !('rep_min' in fresh.exercises[0]);
       D.lastSync = now(); D.online = true; D.lastError = '';
       assemble(); persist(); changed();
       return true;
@@ -262,7 +271,26 @@
 
   /* ---------- Escrituras (la interfaz solo usa estas funciones) ---------- */
   D.saveExercise = function (e) {
-    enqueue([{ t: 'upsert', table: 'exercises', rows: [{ id: e.id, name: e.name, muscle: e.muscle || 'Otro', secondary: e.secondary || [], equipment: e.equipment || null, note: e.note || '', created_at: e.createdAt || now(), updated_at: now() }] }]);
+    enqueue([{ t: 'upsert', table: 'exercises', rows: [exRow(e)] }]);
+  };
+  function exRow(e) {
+    return { id: e.id, name: e.name, muscle: e.muscle || 'Otro', secondary: e.secondary || [], equipment: e.equipment || null, note: e.note || '',
+      rep_min: e.repMin || null, rep_max: e.repMax || null, rest_sec: e.restSec || null, default_sets: e.defaultSets || null, how_to: e.howTo || '',
+      favorite: !!e.favorite, archived: !!e.archived, image_url: e.imageUrl || null, created_at: e.createdAt || now(), updated_at: now() };
+  }
+  /* Agrega varios ejercicios de golpe (biblioteca o importación). */
+  D.saveExercises = function (list) { if (list.length) enqueue([{ t: 'upsert', table: 'exercises', rows: list.map(exRow) }]); };
+  /* Comidas importadas: opcionalmente reemplaza los días indicados. */
+  D.importFood = function (entries, replaceDates) {
+    var ops = [];
+    (replaceDates || []).forEach(function (d) { ops.push({ t: 'delete', table: 'food_entries', match: { date: d } }); });
+    if (entries.length) ops.push({ t: 'upsert', table: 'food_entries', rows: entries.map(function (f) {
+      return { id: f.id, date: f.date, meal: f.meal, description: f.desc || '', kcal: f.kcal || 0, protein_g: f.p || 0, carbs_g: f.c == null ? null : f.c, fat_g: f.f == null ? null : f.f, created_at: f.at || now() };
+    }) });
+    if (ops.length) enqueue(ops);
+  };
+  D.importWeights = function (list) {
+    if (list.length) enqueue([{ t: 'upsert', table: 'bodyweight', rows: list.map(function (w) { return { date: w.date, weight_kg: w.weight, updated_at: now() }; }) }]);
   };
   D.saveTemplate = function (t) {
     var ops = [{ t: 'upsert', table: 'templates', rows: [{ id: t.id, name: t.name, position: t.order || 0, updated_at: now() }] },
@@ -348,7 +376,9 @@
     ['pierna-b', 'Pierna B', [['peso-muerto', 3, 4, 6], ['sentadilla-bulgara', 3, 8, 12], ['extension-cuadriceps', 3, 12, 15], ['hip-thrust', 3, 8, 12], ['curl-femoral-sentado', 3, 10, 15], ['talones-sentado', 4, 12, 20]]]
   ];
   D.seedStarter = function () {
-    var ops = [{ t: 'upsert', table: 'exercises', rows: EX.map(function (e) { return { id: e[0], name: e[1], muscle: e[2], equipment: e[3], secondary: e[4], note: '', created_at: now(), updated_at: now() }; }) },
+    var cat = {}; (window.CATALOG || []).forEach(function (c) { cat[c.id] = c; });
+    var exs = EX.map(function (e) { var c = cat[e[0]] || {}; return { id: e[0], name: e[1], muscle: e[2], equipment: e[3], secondary: e[4], note: '', repMin: c.repMin, repMax: c.repMax, restSec: c.restSec, howTo: c.tip || '' }; });
+    var ops = [{ t: 'upsert', table: 'exercises', rows: exs.map(exRow) },
       { t: 'upsert', table: 'templates', rows: TPL.map(function (t, i) { return { id: t[0], name: t[1], position: i, updated_at: now() }; }) }];
     var items = [];
     TPL.forEach(function (t) { t[2].forEach(function (it, i) { items.push({ template_id: t[0], position: i, exercise_id: it[0], sets: it[1], rep_min: it[2], rep_max: it[3], rest_sec: null }); }); });

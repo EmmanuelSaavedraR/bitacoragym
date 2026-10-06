@@ -40,6 +40,7 @@ const IC = {
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   dots: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  grip: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg>',
   back: '<svg width="12" height="20" viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2L2 10l8 8"/></svg>'
 };
 
@@ -47,7 +48,10 @@ const IC = {
 let authed = false, view = 'train', draft = null;
 let histTab = 'sessions', histEx = null, bodyTab = 'weight', bodyMetric = 'waist', moreSub = null;
 let buildSel = [], foodDay = today(), foodMeal = null, calMonth = today().slice(0, 7), calDay = today();
-let tplEdit = null, restUntil = 0, restTotal = 0, restHidden = false, coachQ = '';
+let tplEdit = null, restUntil = 0, restTotal = 0, restHidden = false, coachQ = '', exMus = 'Todos';
+/* capas de navegación: lo que el botón «atrás» cierra primero (menús, hojas, subpantallas, pestaña) */
+const layers = [];
+const layerDel = (l) => { const i = layers.indexOf(l); if (i >= 0) layers.splice(i, 1); };
 
 /* ---------- avisos, hojas y menús ---------- */
 function toast(msg) {
@@ -59,10 +63,11 @@ function openSheet(o) {
   const el = document.createElement('div');
   el.className = 'back fade';
   el.innerHTML = '<div class="sheet' + (o.short ? ' short' : '') + '" role="dialog" aria-modal="true"><div class="sheet-h"><div class="hl"></div><h3></h3><div class="hr" style="text-align:right"></div></div><div class="sheet-b"></div></div>';
+  delete LFS.pickQ; delete LFS.catQ;
   o.el = el; o.id = uid();
   el.addEventListener('click', (e) => { if (e.target === el && o.dismiss !== false) closeSheet(o); });
   $('#layer').appendChild(el);
-  sheets.push(o);
+  sheets.push(o); o._l = { close: () => closeSheet(o) }; layers.push(o._l);
   drawSheet(o, true);
   return o;
 }
@@ -74,11 +79,13 @@ function drawSheet(o, first) {
   $('.hr', o.el).innerHTML = o.right ? '<button class="nb b" data-act="sheetOk">' + esc(o.right) + '</button>' : '';
   b.innerHTML = o.body();
   if (!first) b.scrollTop = st;
+  restoreLF(o.el);
   if (o.onDraw) o.onDraw(o);
 }
 function closeSheet(o) {
   o = o || sheets[sheets.length - 1]; if (!o) return;
   const i = sheets.indexOf(o); if (i >= 0) sheets.splice(i, 1);
+  if (o._l) layerDel(o._l);
   if (o.el) o.el.remove();
   if (o.onClose) o.onClose();
 }
@@ -89,10 +96,11 @@ function actionSheet(title, actions) {
   el.innerHTML = '<div class="as"><div class="g">' + (title ? '<div class="tt">' + esc(title) + '</div>' : '') +
     actions.map((a, i) => '<button data-i="' + i + '" class="' + (a.red ? 'red ' : '') + (a.bold ? 'b' : '') + '">' + esc(a.label) + '</button>').join('') +
     '</div><div class="g"><button class="b" data-i="-1">Cancelar</button></div></div>';
+  const L = { close: () => { layerDel(L); el.remove(); } }; layers.push(L);
   el.addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (b || e.target === el) {
-      const i = b ? +b.dataset.i : -1; el.remove();
+      const i = b ? +b.dataset.i : -1; layerDel(L); el.remove();
       if (i >= 0 && actions[i].fn) setTimeout(actions[i].fn, 0);
     }
   });
@@ -148,15 +156,21 @@ function bestPrevE1(exId, skipId) {
   S.sessions.forEach((s) => { if (s.id === skipId) return; (s.exercises || []).forEach((e) => { if (e.exerciseId === exId) e.sets.filter(isWork).forEach((x) => { b = Math.max(b, e1rm(x.w, x.r)); }); }); });
   return b;
 }
+const catById = (id) => (window.CATALOG || []).find((c) => c.id === id) || null;
+/* Valores propios de cada ejercicio (rango, descanso, series); si no tiene, usa los de la biblioteca o 8–12. */
+function exDef(id) {
+  const e = exById(id) || {}, c = catById(id) || {}, min = e.repMin || c.repMin || 8, max = e.repMax || c.repMax || 12;
+  return { min: min, max: Math.max(min, max), rest: e.restSec || c.restSec || (max <= 8 ? 180 : 120), sets: e.defaultSets || 3 };
+}
 function newEntry(exId, it) {
   it = it || {};
-  const ex = exById(exId) || {}, last = lastFor(exId);
-  const n = it.sets || (last ? last.sets.length : 3), sets = [];
+  const ex = exById(exId) || {}, last = lastFor(exId), d = exDef(exId);
+  const n = it.sets || (last ? last.sets.length : d.sets), sets = [];
   for (let i = 0; i < n; i++) {
     const p = last ? (last.sets[i] || last.sets[last.sets.length - 1]) : null;
     sets.push({ w: '', r: '', rir: '', type: 'N', done: false, pw: p ? p.w : null, pr: p ? p.r : null, prir: p ? p.rir : null });
   }
-  return { exerciseId: exId, name: ex.name || 'Ejercicio', muscle: ex.muscle || '', repMin: it.repMin || null, repMax: it.repMax || null, restSec: it.restSec || (it.repMax && it.repMax <= 8 ? 180 : 120), sets };
+  return { exerciseId: exId, name: ex.name || 'Ejercicio', muscle: ex.muscle || '', repMin: it.repMin || d.min, repMax: it.repMax || d.max, restSec: it.restSec || d.rest, sets };
 }
 function startSession(t, custom) {
   const items = custom ? custom.items : (t ? t.items || [] : []);
@@ -204,6 +218,8 @@ function finishSession() {
   }).filter((e) => e.sets.length);
   const end = draft.editing ? (draft.endedAt || new Date().toISOString()) : new Date().toISOString();
   const dur = draft.editing && draft.durationMin ? draft.durationMin : Math.max(1, Math.round((new Date(end) - new Date(draft.startedAt)) / 6e4));
+  let prN = 0, prName = '';
+  exs.forEach((e) => { const b = Math.max.apply(null, e.sets.filter(isWork).map((x) => e1rm(x.w, x.r)).concat([0])), pb = bestPrevE1(e.exerciseId, draft.editing ? draft.id : null); if (b > 0 && pb > 0 && b > pb + 0.05) { prN++; if (!prName) prName = e.name; } });
   D.saveSession({
     id: draft.id, date: draft.date, startedAt: draft.startedAt, endedAt: end, durationMin: dur, templateId: draft.templateId, templateName: draft.templateName,
     kind: draft.kind || 'rutina', muscles: [...new Set(exs.map((e) => e.muscle))], energy: draft.energy, sleepH: num(draft.sleepH), notes: draft.notes || '',
@@ -211,7 +227,7 @@ function finishSession() {
   });
   const sets = exs.reduce((a, e) => a + e.sets.filter(isWork).length, 0), vol = exs.reduce((a, e) => a + e.sets.filter(isWork).reduce((b, x) => b + x.w * x.r, 0), 0);
   const wasEdit = draft.editing; draft = null; restUntil = 0; saveDraft(true);
-  toast(wasEdit ? 'Sesión actualizada' : 'Sesión guardada · ' + plural(sets, 'serie', 'series') + ' · ' + Math.round(vol).toLocaleString('es-MX') + ' kg');
+  toast(wasEdit ? 'Sesión actualizada' : 'Sesión guardada · ' + plural(sets, 'serie', 'series') + ' · ' + Math.round(vol).toLocaleString('es-MX') + ' kg' + (prN ? ' · ' + (prN === 1 ? 'récord en ' + prName : prN + ' récords nuevos') : ''));
   histTab = 'sessions'; go('history');
 }
 function discardDraft() { draft = null; restUntil = 0; saveDraft(true); render(); toast('Sesión descartada. No quedó nada registrado.'); }
@@ -222,10 +238,10 @@ function buildItems(groups) {
     S.sessions.slice(0, 40).forEach((s) => (s.exercises || []).forEach((e) => { if (e.muscle === g) use[e.exerciseId] = (use[e.exerciseId] || 0) + 1; }));
     S.templates.forEach((t) => (t.items || []).forEach((it) => { const e = exById(it.exerciseId); if (e && e.muscle === g) use[it.exerciseId] = (use[it.exerciseId] || 0) + 0.5; }));
     const ids = Object.keys(use).filter(exById).sort((a, b) => use[b] - use[a]);
-    S.exercises.filter((e) => e.muscle === g && !ids.includes(e.id)).forEach((e) => ids.push(e.id));
+    S.exercises.filter((e) => e.muscle === g && !e.archived && !ids.includes(e.id)).forEach((e) => ids.push(e.id));
     ids.slice(0, per).forEach((id) => {
       let tpl = null; S.templates.forEach((t) => (t.items || []).forEach((it) => { if (it.exerciseId === id && !tpl) tpl = it; }));
-      items.push(tpl ? Object.assign({}, tpl) : { exerciseId: id, sets: 3, repMin: 8, repMax: 12 });
+      const d = exDef(id); items.push(tpl ? Object.assign({}, tpl) : { exerciseId: id, sets: d.sets, repMin: d.min, repMax: d.max });
     });
   });
   return items;
@@ -405,7 +421,16 @@ function syncBanner() {
   if (!D.online) return '<div class="banner"><span>Sin conexión. Tus registros se guardan en el teléfono y se envían solos al reconectar.</span></div>';
   if (D.pending()) return '<div class="banner blue"><span>' + (D.syncing ? 'Enviando cambios…' : 'Hay cambios por enviar.') + '</span><button data-act="syncNow">Reintentar</button></div>';
   if (D.lastError) return '<div class="banner red"><span>' + esc(D.lastError) + '</span><button data-act="syncNow">Reintentar</button></div>';
+  if (D.schemaOutdated) return '<div class="banner blue"><span>Un paso pendiente: actualizar tu base de datos para guardar rangos, favoritos y fichas de ejercicios.</span><button data-act="schemaSql">Ver cómo</button></div>';
   return '';
+}
+function schemaSheet() {
+  let copied = false;
+  openSheet({
+    title: 'Actualizar base de datos', left: 'Cerrar',
+    body: () => '<div class="sec"><div class="h"><span>Solo una vez</span></div><div class="group pad"><div class="sub" style="margin:0 0 10px">1. Toca «Copiar SQL».<br>2. Abre tu proyecto en supabase.com → <b>SQL Editor</b> → <b>New query</b>.<br>3. Pega y presiona <b>Run</b> (debe decir Success).<br>4. Vuelve aquí y toca «Sincronizar ahora» en Más → Cuenta.</div><textarea class="prompt" readonly rows="10" id="sqlTx" style="min-height:190px">' + esc(D.MIGRATION_SQL) + '</textarea><div style="margin-top:12px"><button class="btn" data-act="sqlCopy">' + (copied ? 'Copiado ✓' : 'Copiar SQL') + '</button></div></div><div class="f">Mientras tanto la app funciona igual; lo único que no se guarda en tu base son los rangos propios, favoritos y notas de técnica de cada ejercicio.</div></div>',
+    copy: async function () { const ok = await copyText(D.MIGRATION_SQL); if (ok) { copied = true; toast('SQL copiado'); const b = $('[data-act=sqlCopy]'); if (b) b.textContent = 'Copiado ✓'; } else { const tx = $('#sqlTx'); if (tx) { tx.select(); tx.setSelectionRange(0, 9999); } toast('Selecciona el texto y cópialo.'); } }
+  });
 }
 
 /* ---------- Entrenar ---------- */
@@ -452,7 +477,7 @@ function vSession() {
     (!d.editing && d.exercises.length ? '<button class="li chev" data-act="planSheet"><span class="t">Plan del entrenador<small>Pide a Claude el peso y las reps de hoy</small></span><span class="v">' + (d.planned ? 'Aplicado' : '') + '</span></button>' : ''));
   d.exercises.forEach((en, ei) => {
     const prevBest = bestPrevE1(en.exerciseId, d.editing ? d.id : null), ex = exById(en.exerciseId) || {};
-    h += '<section class="xcard"><div class="xh"><h3>' + esc(en.name) + '<div class="sub" style="font-weight:400">' + esc(en.muscle || '') + '</div></h3><button class="more" data-act="exMenu" data-ei="' + ei + '" aria-label="Opciones del ejercicio">' + IC.dots + '</button></div>' +
+    h += '<section class="xcard" data-di="sess"><div class="xh"><button class="grip" aria-label="Arrastra para reordenar">' + IC.grip + '</button><h3><button class="lnk" data-act="exDetail" data-id="' + esc(en.exerciseId) + '">' + esc(en.name) + '</button><div class="sub" style="font-weight:400">' + esc(en.muscle || '') + '</div></h3><button class="more" data-act="exMenu" data-ei="' + ei + '" aria-label="Opciones del ejercicio">' + IC.dots + '</button></div>' +
       '<div class="hint">' + hintFor(en) + '</div>' + (ex.note ? '<div class="xnote"><b>Nota:</b> ' + esc(ex.note) + '</div>' : '') + (en.coachNote ? '<div class="cnote"><b>Entrenador:</b> ' + esc(en.coachNote) + '</div>' : '') +
       '<div class="sh"><span>Serie</span><span>Anterior</span><span>kg</span><span>Reps</span><span>RIR</span><span></span></div>';
     let wn = 0;
@@ -528,10 +553,14 @@ function vRecords() {
   const rs = records();
   if (!rs.length && !S.measurements.length && !S.bodyweight.length) return emptyBox('Aún no hay récords', 'Tus mejores marcas aparecerán aquí en cuanto registres sesiones y medidas.');
   let h = '';
-  if (rs.length) {
-    const recent = rs.filter((r) => daysBetween(r.e1.date, today()) <= 14);
-    if (recent.length) h += '<div class="banner" style="background:var(--green-t)"><span><b>Récords de las últimas 2 semanas:</b> ' + recent.map((r) => esc(r.name) + ' ' + f1(r.e1.v) + ' kg').join(' · ') + '</span></div>';
-    h += sec('Fuerza', rs.map((r) => '<div class="rec"><div><b>' + esc(r.name) + '</b><small>Máx ' + f1(r.mw.w) + ' kg × ' + r.mw.r + ' (' + shortD(r.mw.date) + ')<br>Mejor volumen ' + Math.round(r.vol.v).toLocaleString('es-MX') + ' kg</small></div><div class="v">' + f1(r.e1.v) + '<small>e1RM · ' + shortD(r.e1.date) + '</small></div></div>').join(''), 'Solo cuentan las series efectivas (sin calentamiento).');
+  const ids = rs.map((r) => r.id);
+  if (ids.length) {
+    const sts = ids.map((id) => Object.assign({ id: id, name: exName(id) }, exStats(id))).filter((x) => x.sessions);
+    const feed = []; sts.forEach((x) => x.prs.forEach((p) => { if (p.delta != null) feed.push(Object.assign({ id: x.id, name: x.name, bw: x.bodyweight }, p)); }));
+    feed.sort((a, b) => b.date.localeCompare(a.date));
+    if (feed.length) h += sec('Récords recientes', feed.slice(0, 6).map((p) => li(esc(p.name), { sub: shortD(p.date) + ' · ' + (p.bw ? p.r + ' reps' : f1(p.w) + ' kg × ' + p.r), v: f1(p.v) + (p.bw ? ' reps' : ' e1RM') + ' <span class="up">+' + f1(p.delta) + '</span>', chev: 1, d: { act: 'exDetail', id: p.id } })).join(''), 'Cada vez que superas tu mejor 1RM estimado de ese ejercicio.');
+    sts.sort((a, b) => b.lastDate.localeCompare(a.lastDate));
+    h += fg(sec('Por ejercicio', '<label class="li"><span class="t">Buscar</span><input id="recQ" data-lf=".rrow" placeholder="Nombre del ejercicio" autocomplete="off" style="text-align:left"></label>' + sts.map((x) => '<button class="li chev rrow" data-n="' + esc(norm(x.name)) + '" data-act="exDetail" data-id="' + esc(x.id) + '"><span class="t">' + esc(x.name) + '<small>' + (x.bodyweight ? 'Máx. ' + x.maxReps.r + ' reps' : 'Máx. ' + f1(x.maxW.w) + ' kg × ' + x.maxW.r) + ' · ' + ago(x.lastDate) + '</small></span><span class="v">' + (x.bodyweight ? x.maxReps.r + ' reps' : f1(x.best ? x.best.v : 0) + ' <small>e1RM</small>') + '</span></button>').join(''), 'Toca un ejercicio para ver su mejor peso por repeticiones, su progreso y sus récords.'));
   }
   if (S.measurements.length) {
     const rows = MEAS.map((k) => {
@@ -608,6 +637,7 @@ function vFood() {
   h += '<div class="tiles" style="grid-template-columns:1fr 1fr"><div class="tile"><span class="l">Calorías</span><span class="big">' + Math.round(tot.kcal) + ' <small>' + (K ? '/ ' + K + ' kcal' : 'kcal') + '</small></span>' + (K ? '<div class="meter"><i class="' + (tot.kcal > K * 1.05 ? 'over' : '') + '" style="width:' + Math.min(100, tot.kcal / K * 100) + '%"></i></div>' : '') + '</div>' +
     '<div class="tile"><span class="l">Proteína</span><span class="big">' + Math.round(tot.p) + ' <small>' + (P ? '/ ' + P + ' g' : 'g') + '</small></span>' + (P ? '<div class="meter"><i style="width:' + Math.min(100, tot.p / P * 100) + '%"></i></div>' : '') + '</div></div>';
   if (tot.c || tot.f || fd.length) h += '<div class="legend" style="margin:-12px 0 20px">' + (tot.c || tot.f ? '<span>Carbohidratos ' + Math.round(tot.c) + ' g · Grasa ' + Math.round(tot.f) + ' g</span>' : '') + (fd.length ? '<span>Promedio 7 días: ' + Math.round(fd.reduce((a, x) => a + x.kcal, 0) / fd.length) + ' kcal · ' + Math.round(fd.reduce((a, x) => a + x.p, 0) / fd.length) + ' g prot</span>' : '') + '</div>';
+  h += '<div style="margin:0 16px 16px"><button class="btn tint" data-act="importFood">Registrar con Claude</button></div>';
   if (!K && !P) h += '<div class="banner blue"><span>Define tus metas de calorías y proteína en Más → Ajustes.</span></div>';
   h += '<div class="seg">' + MEALS.map((m) => '<button class="' + (foodMeal === m ? 'on' : '') + '" data-act="meal" data-v="' + m + '">' + m + '</button>').join('') + '</div>';
   h += sec('Agregar a ' + foodMeal.toLowerCase(),
@@ -657,6 +687,118 @@ function planSheet() {
   return o;
 }
 
+/* ---------- Registrar con Claude: prompt → JSON → vista previa → guardar ---------- */
+const DOW = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+const MEAL_ALIAS = { desayuno: 'Desayuno', almuerzo: 'Comida', comida: 'Comida', lunch: 'Comida', cena: 'Cena', merienda: 'Snack', colacion: 'Snack', snack: 'Snack', antojo: 'Snack', postre: 'Snack', preentreno: 'Snack', breakfast: 'Desayuno', dinner: 'Cena' };
+const validDay = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && isoDay(parseDay(s)) === s;
+function extractJson(text) {
+  text = String(text || '').replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i); if (fence && fence[1].indexOf('{') >= 0) text = fence[1];
+  const a = text.indexOf('{'), b = text.lastIndexOf('}'); if (a < 0 || b < a) return null;
+  try { return JSON.parse(text.slice(a, b + 1)); } catch (e) { return null; }
+}
+function frequentFoods(n) {
+  const m = new Map();
+  S.food.forEach((e) => { const k = norm(e.desc).trim(); if (!k) return; const r = m.get(k) || { e: e, n: 0 }; r.n++; if ((e.at || '') > (r.e.at || '')) r.e = e; m.set(k, r); });
+  return [...m.values()].sort((a, b) => b.n - a.n).slice(0, n).map((r) => r.e);
+}
+function importPrompt(kind) {
+  const t = today(), d = parseDay(t);
+  if (kind === 'ex') {
+    return 'Eres mi asistente de entrenamiento de fuerza e hipertrofia. Quiero crear ejercicios nuevos para mi app de registro.\n\n' +
+      'MIS EJERCICIOS ACTUALES (no los repitas):\n' + (S.exercises.map((e) => e.name).join('; ') || '(ninguno)') + '\n\n' +
+      'GRUPOS MUSCULARES VÁLIDOS: ' + MUSCLES.join(', ') + '.\n\n' +
+      'CÓMO RESPONDER:\n1. Si mi petición es vaga, hazme máximo 2 preguntas cortas antes de proponer.\n2. Para cada ejercicio da un rango de repeticiones típico (rep_min, rep_max), descanso en segundos y una nota breve de técnica (máx. 200 caracteres).\n3. Cuando esté listo, responde SOLO con un bloque JSON, sin texto alrededor, con este formato:\n' +
+      '{"ejercicios":[{"nombre":"Press de pecho en máquina","grupo":"Pecho","secundarios":["Tríceps","Hombros"],"equipo":"Máquina","rep_min":8,"rep_max":12,"descanso_s":120,"notas":"Escápulas atrás y abajo; baja controlado."}]}\n\n' +
+      'Después de este mensaje te digo qué ejercicios quiero.';
+  }
+  const goals = [S.settings.kcal ? S.settings.kcal + ' kcal' : null, S.settings.protein ? S.settings.protein + ' g de proteína' : null].filter(Boolean).join(' y ');
+  const es = foodOn(t), tot = dayTot(es), fr = frequentFoods(25);
+  return 'Eres mi asistente de nutrición. Voy a contarte lo que he comido y tú lo conviertes en registros para mi app de seguimiento.\n\n' +
+    'FECHA DE HOY: ' + t + ' (' + DOW[d.getDay()] + ')\n' +
+    'MIS METAS DIARIAS: ' + (goals || 'no definidas') + '\n\n' +
+    'YA REGISTRADO HOY EN LA APP' + (es.length ? ' (total ' + Math.round(tot.kcal) + ' kcal, ' + Math.round(tot.p) + ' g prot):\n' + es.map((e) => '- ' + e.meal + ': ' + e.desc + ' · ' + Math.round(e.kcal || 0) + ' kcal, P ' + f1(e.p || 0) + ' g').join('\n') : ': nada todavía') + '\n\n' +
+    'ALIMENTOS QUE COMO SEGUIDO (usa estos valores cuando coincidan):\n' + (fr.length ? fr.map((e) => '- ' + e.desc + ': ' + Math.round(e.kcal || 0) + ' kcal, P ' + f1(e.p || 0) + ' g, C ' + f1(e.c || 0) + ' g, G ' + f1(e.f || 0) + ' g').join('\n') : '(aún no hay)') + '\n\n' +
+    'CÓMO RESPONDER:\n1. Si una porción es ambigua y cambia mucho el resultado, hazme como máximo 3 preguntas cortas antes de calcular. Si no, estima con porciones típicas.\n' +
+    '2. Una entrada por alimento o platillo (no un total por comida), para poder borrarlas por separado.\n' +
+    '3. No repitas lo que ya está registrado hoy, salvo que te pida corregirlo. Puedo escribirte varias veces en el día: cada vez devuelve solo lo nuevo.\n' +
+    '4. Cuando esté listo, responde SOLO con un bloque JSON, sin texto alrededor, con este formato (el campo "peso" solo si te digo mi peso):\n' +
+    '{"comidas":[{"fecha":"' + t + '","comida":"Desayuno","descripcion":"3 huevos revueltos y 2 tortillas","kcal":420,"proteina_g":24,"carbohidratos_g":30,"grasa_g":22}],"peso":[{"fecha":"' + t + '","kg":80.5}]}\n' +
+    '"comida" debe ser exactamente: Desayuno, Comida, Cena o Snack. Usa números sin unidades.\n\n' +
+    'Después de este mensaje te cuento lo que comí.';
+}
+function parseImport(text) {
+  const j = extractJson(text); if (!j || typeof j !== 'object') return null;
+  const out = { food: [], weights: [], ex: [], dup: 0, bad: 0 }, now0 = Date.now();
+  (Array.isArray(j.comidas) ? j.comidas : []).forEach((x, i) => {
+    if (!x || typeof x !== 'object') { out.bad++; return; }
+    const date = x.fecha == null ? today() : x.fecha; if (!validDay(date)) { out.bad++; return; }
+    const desc = String(x.descripcion || x.desc || '').trim().slice(0, 200);
+    const p = num(x.proteina_g), c = num(x.carbohidratos_g), f = num(x.grasa_g); let k = num(x.kcal);
+    if (k == null && (p != null || c != null || f != null)) k = Math.round((p || 0) * 4 + (c || 0) * 4 + (f || 0) * 9);
+    if ((!desc && k == null) || (k != null && (k < 0 || k > 5000))) { out.bad++; return; }
+    const mk = norm(String(x.comida || '').split(/[\s/]/)[0]);
+    out.food.push({ id: uid() + i, date: date, meal: MEAL_ALIAS[mk] || 'Snack', desc: desc || 'Sin descripción', kcal: Math.round(k || 0), p: r1(p || 0), c: c == null ? null : r1(c), f: f == null ? null : r1(f), at: new Date(now0 + i).toISOString() });
+  });
+  (Array.isArray(j.peso) ? j.peso : []).forEach((x) => {
+    const w = x && num(x.kg), date = x && (x.fecha == null ? today() : x.fecha);
+    if (w == null || w < 20 || w > 400 || !validDay(date)) { out.bad++; return; }
+    out.weights.push({ date: date, weight: r1(w) });
+  });
+  const used = new Set(S.exercises.map((e) => e.id)), names = new Set(S.exercises.map((e) => norm(e.name).trim()));
+  (Array.isArray(j.ejercicios) ? j.ejercicios : []).forEach((x) => {
+    const name = x && String(x.nombre || x.name || '').trim().slice(0, 80); if (!name) { out.bad++; return; }
+    const nk = norm(name).trim(); if (names.has(nk)) { out.dup++; return; } names.add(nk);
+    const cat = (window.CATALOG || []).find((c) => norm(c.name).trim() === nk && !used.has(c.id));
+    const mus = MUSCLES.find((m) => norm(m) === norm(x.grupo || x.muscle)) || (cat ? cat.muscle : 'Otro');
+    const sec2 = (Array.isArray(x.secundarios) ? x.secundarios : []).map((s) => MUSCLES.find((m) => norm(m) === norm(s))).filter((m) => m && m !== mus);
+    let a = Math.round(num(x.rep_min)) || (cat && cat.repMin) || null, b = Math.round(num(x.rep_max)) || (cat && cat.repMax) || null; if (a && b && a > b) { const t = a; a = b; b = t; }
+    let id = cat ? cat.id : slug(name); if (used.has(id)) id = id + '-' + uid().slice(-4); used.add(id);
+    out.ex.push({ id: id, name: name, muscle: mus, secondary: sec2, equipment: String(x.equipo || (cat && cat.equipment) || '').slice(0, 40), note: '', repMin: a, repMax: b, restSec: Math.round(num(x.descanso_s)) || (cat && cat.restSec) || null, howTo: String(x.notas || x.tecnica || (cat && cat.tip) || '').slice(0, 400) });
+  });
+  return out;
+}
+function importSheet(kind) {
+  const I = { kind: kind, parsed: null, mode: 'add', copied: false };
+  const o = openSheet({
+    title: kind === 'ex' ? 'Ejercicios con Claude' : 'Registrar con Claude', left: 'Cerrar', right: null, imp: I,
+    body: () => I.parsed ? importPreview(I) :
+      '<div class="sec"><div class="h"><span>Paso 1</span></div><div class="group pad"><div class="sub" style="margin:0 0 10px">' + (kind === 'ex' ? 'Copia el prompt, pégalo en un chat de Claude y dile qué ejercicios quieres (por ejemplo: «agrégame 6 ejercicios de pecho con mancuernas y poleas»).' : 'Copia el prompt (ya incluye tu fecha, tus metas, lo que registraste hoy y tus alimentos frecuentes), pégalo en un chat de Claude y cuéntale qué comiste. Puedes volver al mismo chat varias veces en el día.') + '</div><button class="btn" data-act="impCopy">' + (I.copied ? 'Copiado ✓' : 'Copiar prompt') + '</button></div></div>' +
+      '<div class="sec"><div class="h"><span>Paso 2</span></div><div class="group pad"><div class="sub" style="margin:0 0 10px">Pega aquí la respuesta de Claude (el bloque JSON). Verás una vista previa antes de guardar nada.</div><textarea class="field" id="impIn" placeholder="{&quot;' + (kind === 'ex' ? 'ejercicios' : 'comidas') + '&quot;: [ … ]}" style="font-family:var(--mono);font-size:13px" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea><div style="margin-top:10px"><button class="btn gray" data-act="impParse">Ver vista previa</button></div></div></div>',
+    ok: () => {
+      const P = I.parsed; if (!P) return;
+      if (P.food.length || I.mode === 'replace') {
+        const dates = [...new Set(P.food.map((f) => f.date))], rep = I.mode === 'replace' ? dates : [];
+        D.importFood(P.food, rep);
+      }
+      D.importWeights(P.weights);
+      D.saveExercises(P.ex);
+      const bits = [P.food.length ? plural(P.food.length, 'comida', 'comidas') : null, P.weights.length ? plural(P.weights.length, 'peso', 'pesos') : null, P.ex.length ? plural(P.ex.length, 'ejercicio', 'ejercicios') : null].filter(Boolean);
+      closeSheet(o); toast('Guardado: ' + bits.join(', ')); render();
+    }
+  });
+  return o;
+}
+function importPreview(I) {
+  const P = I.parsed; let h = '';
+  const total = P.food.length + P.weights.length + P.ex.length;
+  if (!total) return '<div class="sec"><div class="group pad"><b>No encontré nada que guardar</b><div class="sub" style="margin-top:6px">' + (P.dup ? 'Todos los ejercicios ya existen en tu app. ' : '') + (P.bad ? plural(P.bad, 'elemento no era válido', 'elementos no eran válidos') + '. ' : '') + 'Pídele a Claude que respete el formato.</div><div style="margin-top:12px"><button class="btn gray" data-act="impBack">Volver a pegar</button></div></div></div>';
+  if (P.food.length) {
+    const days = [...new Set(P.food.map((f) => f.date))].sort(), clash = days.filter((d) => foodOn(d).length);
+    days.forEach((d) => {
+      const xs = P.food.filter((f) => f.date === d), t = dayTot(xs), have = foodOn(d);
+      h += sec(fmtDate(d) + ' · ' + Math.round(t.kcal) + ' kcal · ' + Math.round(t.p) + ' g prot', xs.map((e) => li(esc(e.desc), { sub: e.meal + ' · ' + e.kcal + ' kcal · ' + f1(e.p) + ' g prot' + (e.c != null ? ' · ' + f1(e.c) + ' C' : '') + (e.f != null ? ' · ' + f1(e.f) + ' G' : '') })).join(''),
+        have.length ? 'Ese día ya tienes ' + plural(have.length, 'entrada', 'entradas') + ' (' + Math.round(dayTot(have).kcal) + ' kcal).' : '');
+    });
+    if (clash.length) h += '<div class="seg" style="margin:0 16px 8px"><button class="' + (I.mode === 'add' ? 'on' : '') + '" data-act="impMode" data-v="add">Agregar a lo que ya hay</button><button class="' + (I.mode === 'replace' ? 'on' : '') + '" data-act="impMode" data-v="replace">Reemplazar esos días</button></div><div class="f" style="margin-bottom:12px">' + (I.mode === 'add' ? 'Se suma a lo ya registrado.' : 'Se borrará todo lo registrado en ' + clash.map(fmtDate).join(', ') + ' y quedará solo lo de la vista previa.') + '</div>';
+  }
+  if (P.weights.length) h += sec('Peso', P.weights.map((w) => li(fmtDate(w.date), { v: f1(w.weight) + ' kg' })).join(''), 'Si ya había un peso ese día, se reemplaza.');
+  if (P.ex.length) h += sec('Ejercicios nuevos (' + P.ex.length + ')', P.ex.map((e) => li(esc(e.name), { sub: e.muscle + (e.equipment ? ' · ' + e.equipment : '') + (e.repMin && e.repMax ? ' · ' + e.repMin + '–' + e.repMax + ' reps' : '') })).join(''));
+  if (P.dup || P.bad) h += '<p class="muted small" style="margin:0 16px 12px">' + [P.dup ? plural(P.dup, 'ejercicio omitido porque ya existe', 'ejercicios omitidos porque ya existen') : null, P.bad ? plural(P.bad, 'elemento omitido por datos inválidos', 'elementos omitidos por datos inválidos') : null].filter(Boolean).join(' · ') + '</p>';
+  return h + '<div style="margin:0 16px 8px"><button class="btn gray" data-act="impBack">Volver a pegar</button></div>';
+}
+function importDraw(o) { o.right = o.imp.parsed && (o.imp.parsed.food.length || o.imp.parsed.weights.length || o.imp.parsed.ex.length) ? 'Guardar' : null; o.left = o.imp.parsed ? 'Cerrar' : 'Cerrar'; drawSheet(o); }
+
 /* ---------- Más: rutinas, ejercicios, exportar, ajustes, cuenta ---------- */
 const INSTALL_STEPS = [
   ['Abre la app en Safari', 'Escribe o pega la dirección donde alojaste la app. Tiene que ser Safari, no Chrome ni otro navegador.'],
@@ -669,16 +811,27 @@ function vMore() {
   const back = backBtn('Más');
   if (moreSub === 'routines') {
     return { title: 'Rutinas', left: back, right: '<button class="nb b" data-act="newTpl">Nueva</button>', html: !S.templates.length ? emptyBox('Sin rutinas', 'Crea tus rutinas para que la app te sugiera cuál sigue.', '<button class="btn inline" data-act="newTpl">Crear rutina</button>') :
-      sec('Orden de rotación', S.templates.map((t, i) => '<div class="li"><button class="t" data-act="tplEdit" data-id="' + esc(t.id) + '">' + (i + 1) + '. ' + esc(t.name) + '<small>' + plural((t.items || []).length, 'ejercicio', 'ejercicios') + '</small></button><span class="mvs"><button class="mv" data-act="tplMove" data-id="' + esc(t.id) + '" data-d="-1" aria-label="Subir en la rotación"' + (i === 0 ? ' disabled' : '') + '>↑</button><button class="mv" data-act="tplMove" data-id="' + esc(t.id) + '" data-d="1" aria-label="Bajar en la rotación"' + (i === S.templates.length - 1 ? ' disabled' : '') + '>↓</button></span></div>').join(''),
-        'La app sugiere la siguiente rutina según este orden. Solo las sesiones hechas con una rutina avanzan la rotación; las sesiones por grupos o libres no la mueven. Toca una rutina para editarla.') };
+      sec('Orden de rotación', S.templates.map((t, i) => '<div class="li" data-di="routine"><button class="grip" aria-label="Arrastra para reordenar">' + IC.grip + '</button><button class="t" data-act="tplEdit" data-id="' + esc(t.id) + '">' + (i + 1) + '. ' + esc(t.name) + '<small>' + plural((t.items || []).length, 'ejercicio', 'ejercicios') + '</small></button></div>').join(''),
+        'La app sugiere la siguiente rutina según este orden. Solo las sesiones hechas con una rutina avanzan la rotación; las sesiones por grupos o libres no la mueven. Arrastra el asa (⋮⋮) para cambiar el orden. Toca una rutina para editarla.') };
   }
   if (moreSub === 'exercises') {
-    let h = '';
-    MUSCLES.forEach((m) => {
-      const xs = S.exercises.filter((e) => e.muscle === m); if (!xs.length) return;
-      h += sec(m, xs.map((e) => li(esc(e.name), { sub: esc([e.equipment].concat((e.secondary || []).length ? ['también: ' + e.secondary.join(', ')] : []).filter(Boolean).join(' · ')), chev: 1, d: { act: 'exEdit', id: e.id } })).join(''));
-    });
-    return { title: 'Ejercicios', left: back, right: '<button class="nb b" data-act="exNew">Nuevo</button>', html: (h || emptyBox('Sin ejercicios', 'Agrega tu primer ejercicio.')) + '<p class="muted small" style="margin:-8px 16px 24px">Los ejercicios no se borran para no perder el historial de tus sesiones.</p>' };
+    const use = lastUseMap(), live = S.exercises.filter((e) => !e.archived), arch = S.exercises.filter((e) => e.archived);
+    const mus = MUSCLES.filter((m) => live.some((e) => e.muscle === m));
+    if (exMus !== 'Todos' && exMus !== '★' && !mus.includes(exMus)) exMus = 'Todos';
+    const rowH = (e) => '<button class="li chev exrow" data-n="' + esc(norm(e.name + ' ' + e.muscle)) + '" data-act="exDetail" data-id="' + esc(e.id) + '"><span class="t">' + esc(e.name) + (e.favorite ? ' <span style="color:var(--orange)">★</span>' : '') + '<small>' + esc([e.equipment, e.repMin && e.repMax ? e.repMin + '–' + e.repMax + ' reps' : null].filter(Boolean).join(' · ')) + '</small></span><span class="v">' + (use[e.id] ? ago(use[e.id]) : '') + '</span></button>';
+    let h = '<div class="row" style="margin:0 16px 16px"><button class="btn tint sm grow" data-act="catOpen">Biblioteca (' + (window.CATALOG || []).length + ')</button><button class="btn tint sm grow" data-act="importEx">Pedir a Claude</button></div>';
+    h += sec('', '<label class="li"><span class="t">Buscar</span><input id="exQ" data-lf=".exrow" placeholder="Nombre del ejercicio" autocomplete="off" style="text-align:left"></label>');
+    h += '<div class="chips">' + [['Todos', 'Todos'], ['★', '★ Favoritos']].concat(mus.map((m) => [m, m])).map((c) => '<button class="chip ' + (exMus === c[0] ? 'on' : '') + '" data-act="exMus" data-v="' + esc(c[0]) + '">' + esc(c[1]) + '</button>').join('') + '</div>';
+    if (exMus === 'Todos') {
+      const fav = live.filter((e) => e.favorite);
+      if (fav.length) h += fg(sec('Favoritos', fav.map(rowH).join('')));
+      mus.forEach((m) => { const xs = live.filter((e) => e.muscle === m && !e.favorite); if (xs.length) h += fg(sec(m, xs.map(rowH).join(''))); });
+      if (arch.length) h += fg(sec('Archivados', arch.map(rowH).join('')));
+    } else {
+      const xs = live.filter((e) => exMus === '★' ? e.favorite : e.muscle === exMus);
+      h += xs.length ? fg(sec('', xs.map(rowH).join(''))) : emptyBox(exMus === '★' ? 'Sin favoritos' : 'Sin ejercicios', exMus === '★' ? 'Marca un ejercicio con la estrella en su ficha.' : 'Agrega ejercicios desde la biblioteca.');
+    }
+    return { title: 'Ejercicios', left: back, right: '<button class="nb b" data-act="exNew">Nuevo</button>', html: h };
   }
   if (moreSub === 'export') {
     const rows = [['sets', 'Series (una fila por serie)', 'La tabla principal: ideal para gráficas en Sheets, Looker Studio o Excel'], ['sessions', 'Sesiones', 'Una fila por sesión, con volumen, energía y sueño'], ['meas', 'Medidas', 'Los 8 perímetros por fecha'], ['bw', 'Peso corporal', 'Un registro por día'], ['food', 'Comidas', 'Calorías, proteína, carbohidratos y grasa'], ['ex', 'Ejercicios', 'Tu biblioteca'], ['json', 'Respaldo completo (JSON)', 'Todo junto, para guardar una copia']];
@@ -696,7 +849,7 @@ function vMore() {
     const st = !D.online ? 'Sin conexión' : D.pending() ? D.pending() + ' por enviar' : 'Todo sincronizado';
     return { title: 'Cuenta', left: back, html: sec('Sesión', li('Correo', { v: esc(D.user ? D.user.email : '—') }) + li('Estado', { v: st }) + li('Última sincronización', { v: D.lastSync ? new Date(D.lastSync).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—' })) +
       (D.lastError ? '<div class="banner red"><span>' + esc(D.lastError) + '</span></div>' : '') +
-      sec('', li('Sincronizar ahora', { blue: 1, d: { act: 'syncNow' } }) + (dead.length ? li('Cambios que no se pudieron guardar (' + dead.length + ')', { sub: 'Toca para copiar el detalle', blue: 1, d: { act: 'copyDead' } }) : '')) +
+      sec('', li('Sincronizar ahora', { blue: 1, d: { act: 'syncNow' } }) + (D.schemaOutdated ? li('Actualizar base de datos', { sub: 'Falta un paso de una sola vez', blue: 1, d: { act: 'schemaSql' } }) : '') + (dead.length ? li('Cambios que no se pudieron guardar (' + dead.length + ')', { sub: 'Toca para copiar el detalle', blue: 1, d: { act: 'copyDead' } }) : '')) +
       sec('', li('Cerrar sesión', { red: 1, d: { act: 'logout' } }), 'Tus datos quedan en Supabase. Al volver a entrar se descargan de nuevo.') };
   }
   if (moreSub === 'install') {
@@ -720,7 +873,7 @@ function tplSheet(t) {
     body: () => sec('', '<label class="li"><span class="t">Nombre</span><input data-bind="tpl:name" value="' + esc(tplEdit.name) + '" placeholder="Torso A" autocomplete="off"></label>') +
       sec('Ejercicios', (tplEdit.items.map((it, i) => {
         const e = exById(it.exerciseId);
-        return '<div class="li col"><div class="row between"><b>' + esc(e ? e.name : '(ejercicio borrado)') + '</b><span class="mvs"><button class="mv" data-act="tplUp" data-i="' + i + '" aria-label="Subir"' + (i === 0 ? ' disabled' : '') + '>↑</button><button class="mv" data-act="tplDn" data-i="' + i + '" aria-label="Bajar"' + (i === tplEdit.items.length - 1 ? ' disabled' : '') + '>↓</button><button class="mv red" data-act="tplRm" data-i="' + i + '" aria-label="Quitar">✕</button></span></div>' +
+        return '<div class="li col" data-di="tpl"><div class="row between"><span class="row" style="gap:6px;min-width:0"><button class="grip" aria-label="Arrastra para reordenar">' + IC.grip + '</button><b>' + esc(e ? e.name : '(ejercicio borrado)') + '</b></span><span class="mvs"><button class="mv red" data-act="tplRm" data-i="' + i + '" aria-label="Quitar">✕</button></span></div>' +
           '<div class="cfg"><label>Series<input inputmode="numeric" data-tf="sets" data-i="' + i + '" value="' + esc(it.sets || 3) + '"></label><label>Reps mín.<input inputmode="numeric" data-tf="repMin" data-i="' + i + '" value="' + esc(it.repMin || '') + '"></label><label>Reps máx.<input inputmode="numeric" data-tf="repMax" data-i="' + i + '" value="' + esc(it.repMax || '') + '"></label></div></div>';
       }).join('') || '<div class="li"><span class="t muted">Aún no hay ejercicios.</span></div>') + li('Agregar ejercicio', { blue: 1, d: { act: 'tplAddEx' } }), 'El rango de repeticiones activa la progresión doble: al llegar al máximo en todas las series, la app te sugiere subir peso.') +
       (tplEdit.isNew ? '' : sec('', li('Eliminar rutina', { red: 1, d: { act: 'tplDelete' } }), 'Las sesiones ya registradas no se borran.')),
@@ -738,40 +891,46 @@ function pickEx(cb, title) {
   const o = openSheet({
     title: title || 'Elegir ejercicio', left: 'Cancelar',
     body: () => {
-      let h = sec('', '<label class="li"><span class="t">Buscar</span><input id="pickQ" placeholder="Nombre del ejercicio" autocomplete="off" style="text-align:left"></label>') + sec('', li('Crear ejercicio nuevo', { blue: 1, d: { act: 'pickNew' } }));
-      MUSCLES.forEach((m) => {
-        const xs = S.exercises.filter((e) => e.muscle === m); if (!xs.length) return;
-        h += '<div class="pgroup">' + sec(m, xs.map((e) => '<button class="li pk" data-n="' + esc(norm(e.name)) + '" data-act="pickPick" data-id="' + esc(e.id) + '"><span class="t">' + esc(e.name) + '<small>' + esc(e.equipment || '') + '</small></span></button>').join('')) + '</div>';
-      });
+      const use = lastUseMap(), act = S.exercises.filter((e) => !e.archived);
+      const row = (e, ctx) => '<button class="li pk" data-n="' + esc(norm(e.name)) + '" data-act="pickPick" data-id="' + esc(e.id) + '"><span class="t">' + esc(e.name) + '<small>' + esc([ctx ? e.muscle : null, e.equipment].filter(Boolean).join(' · ')) + '</small></span><span class="v">' + (use[e.id] ? ago(use[e.id]) : '') + '</span></button>';
+      let h = sec('', '<label class="li"><span class="t">Buscar</span><input id="pickQ" data-lf=".pk" placeholder="Nombre del ejercicio" autocomplete="off" style="text-align:left"></label>');
+      h += sec('', li('Crear ejercicio nuevo', { blue: 1, d: { act: 'pickNew' } }) + li('Buscar en la biblioteca (' + (window.CATALOG || []).length + ')', { blue: 1, d: { act: 'pickCat' } }));
+      const fav = act.filter((e) => e.favorite);
+      if (fav.length) h += '<div data-fg>' + sec('Favoritos', fav.map((e) => row(e, true)).join('')) + '</div>';
+      const rec = act.filter((e) => use[e.id] && !e.favorite).sort((a, b) => use[b.id].localeCompare(use[a.id])).slice(0, 6);
+      if (rec.length) h += '<div data-fg>' + sec('Recientes', rec.map((e) => row(e, true)).join('')) + '</div>';
+      MUSCLES.forEach((m) => { const xs = act.filter((e) => e.muscle === m); if (xs.length) h += '<div data-fg>' + sec(m, xs.map((e) => row(e, false)).join('')) + '</div>'; });
       return h;
     }
   });
   o.pick = (id) => { closeSheet(o); cb(id); };
   o.nuevo = () => exSheet(null, (id) => { closeSheet(o); cb(id); });
+  o.catalog = () => catalogSheet({ q: LFS.pickQ, onAdd: (id) => { closeSheet(o); cb(id); } });
   return o;
 }
 const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-function filterPick(q) {
-  const o = topSheet(); if (!o || !o.el) return; const k = norm(q.trim());
-  o.el.querySelectorAll('.pk').forEach((b) => { b.hidden = !!k && !b.dataset.n.includes(k); });
-  o.el.querySelectorAll('.pgroup').forEach((g) => { g.hidden = !g.querySelector('.pk:not([hidden])'); });
-}
 
 function exSheet(ex, cb) {
-  const st = { id: ex ? ex.id : null, name: ex ? ex.name : '', muscle: ex ? ex.muscle : 'Pecho', equipment: ex ? ex.equipment || '' : '', secondary: ex ? (ex.secondary || []).slice() : [], note: ex ? ex.note || '' : '' };
+  const st = { id: ex ? ex.id : null, name: ex ? ex.name : '', muscle: ex ? ex.muscle : 'Pecho', equipment: ex ? ex.equipment || '' : '', secondary: ex ? (ex.secondary || []).slice() : [], note: ex ? ex.note || '' : '',
+    repMin: ex && ex.repMin ? String(ex.repMin) : '', repMax: ex && ex.repMax ? String(ex.repMax) : '', restSec: ex && ex.restSec ? String(ex.restSec) : '', defaultSets: ex && ex.defaultSets ? String(ex.defaultSets) : '',
+    howTo: ex ? ex.howTo || '' : '', favorite: !!(ex && ex.favorite), archived: !!(ex && ex.archived), imageUrl: ex ? ex.imageUrl || null : null };
   const o = openSheet({
     title: ex ? 'Editar ejercicio' : 'Nuevo ejercicio', right: 'Guardar',
     body: () => sec('', '<label class="li"><span class="t">Nombre</span><input data-bind="ex:name" value="' + esc(st.name) + '" placeholder="Press banca con barra" autocomplete="off"></label>' +
       '<label class="li"><span class="t">Grupo principal</span><select data-bind="ex:muscle">' + MUSCLES.map((m) => '<option ' + (m === st.muscle ? 'selected' : '') + '>' + m + '</option>').join('') + '</select></label>' +
-      '<label class="li"><span class="t">Equipo</span><select data-bind="ex:equipment"><option value="">—</option>' + EQUIP.map((m) => '<option ' + (m === st.equipment ? 'selected' : '') + '>' + m + '</option>').join('') + '</select></label>') +
+      '<label class="li"><span class="t">Equipo</span><select data-bind="ex:equipment"><option value="">—</option>' + EQUIP.map((m) => '<option ' + (m === st.equipment ? 'selected' : '') + '>' + m + '</option>').join('') + '</select></label>' +
+      '<label class="li"><span class="t">Favorito</span><input type="checkbox" class="switch" data-bind="ex:favorite" ' + (st.favorite ? 'checked' : '') + '></label>') +
       sec('Músculos secundarios', '<div class="chips wrapc" style="padding:12px 12px">' + MUSCLES.filter((m) => m !== 'Otro').map((m) => '<button class="chip ' + (st.secondary.includes(m) ? 'on' : '') + '" data-act="exSec" data-v="' + m + '">' + m + '</button>').join('') + '</div>', 'Cuentan media serie en tu volumen semanal.') +
-      sec('Nota', '<div class="pad"><textarea class="field" data-bind="ex:note" placeholder="Ajuste de asiento, agarre, técnica…">' + esc(st.note) + '</textarea></div>', 'Aparece como recordatorio dentro de la sesión.'),
+      sec('Valores sugeridos', '<div class="li col"><div class="cfg" style="grid-template-columns:repeat(4,1fr)"><label>Reps mín.<input inputmode="numeric" data-bind="ex:repMin" value="' + esc(st.repMin) + '"></label><label>Reps máx.<input inputmode="numeric" data-bind="ex:repMax" value="' + esc(st.repMax) + '"></label><label>Descanso s<input inputmode="numeric" data-bind="ex:restSec" value="' + esc(st.restSec) + '"></label><label>Series<input inputmode="numeric" data-bind="ex:defaultSets" value="' + esc(st.defaultSets) + '"></label></div></div>', 'Cada ejercicio usa su propio rango. Al agregarlo o reemplazarlo en una sesión se aplican estos valores (las rutinas guardan los suyos).') +
+      sec('Cómo hacerlo', '<div class="pad"><textarea class="field" data-bind="ex:howTo" placeholder="Indicaciones de técnica">' + esc(st.howTo) + '</textarea></div>') +
+      sec('Nota personal', '<div class="pad"><textarea class="field" data-bind="ex:note" placeholder="Ajuste de asiento, agarre, molestias…">' + esc(st.note) + '</textarea></div>', 'La nota aparece como recordatorio dentro de la sesión.'),
     ok: () => {
       const name = st.name.trim(); if (!name) { toast('Ponle un nombre al ejercicio.'); return; }
       let id = st.id;
       if (!id) { id = slug(name); if (exById(id)) id += '-' + uid().slice(-3); }
-      const prev = exById(id);
-      D.saveExercise({ id: id, name: name, muscle: st.muscle, secondary: st.secondary.filter((m) => m !== st.muscle), equipment: st.equipment || null, note: st.note.trim(), createdAt: prev ? prev.createdAt : null });
+      const prev = exById(id), iv = (v) => { const n = Math.round(num(v)); return n > 0 ? n : null; };
+      let a = iv(st.repMin), b = iv(st.repMax); if (a && b && a > b) { const t = a; a = b; b = t; }
+      D.saveExercise({ id: id, name: name, muscle: st.muscle, secondary: st.secondary.filter((m) => m !== st.muscle), equipment: st.equipment || null, note: st.note.trim(), repMin: a, repMax: b, restSec: iv(st.restSec), defaultSets: iv(st.defaultSets), howTo: st.howTo.trim(), favorite: st.favorite, archived: st.archived, imageUrl: st.imageUrl, createdAt: prev ? prev.createdAt : null });
       closeSheet(o); toast('Ejercicio guardado'); if (cb) cb(id); else render();
     }
   });
@@ -829,6 +988,103 @@ function trashSheet() {
   o.live = true; return o;
 }
 
+/* ---------- filtro en vivo de listas ---------- */
+const LFS = {};
+const resetLF = () => { delete LFS.exQ; delete LFS.recQ; };
+function applyLF(inp) {
+  const k = norm(inp.value.trim()), sel = inp.dataset.lf, root = inp.closest('.sheet-b') || document;
+  root.querySelectorAll(sel).forEach((r) => { r.hidden = !!k && !(r.dataset.n || '').includes(k); });
+  root.querySelectorAll('[data-fg]').forEach((g) => { g.hidden = !g.querySelector(sel + ':not([hidden])'); });
+}
+function restoreLF(root) { root.querySelectorAll('input[data-lf]').forEach((i) => { if (LFS[i.id]) { i.value = LFS[i.id]; applyLF(i); } }); }
+const fg = (html) => html.replace('<section class="sec">', '<section class="sec" data-fg>');
+function lastUseMap() { const m = {}; S.sessions.forEach((s) => (s.exercises || []).forEach((e) => { if (e.sets.some(isWork) && (!m[e.exerciseId] || s.date > m[e.exerciseId])) m[e.exerciseId] = s.date; })); return m; }
+const exName = (id) => { const e = exById(id); if (e) return e.name; for (const s of S.sessions) { const x = (s.exercises || []).find((q) => q.exerciseId === id); if (x) return x.name; } return id; };
+
+/* ---------- estadísticas por ejercicio ---------- */
+const REPS = [1, 2, 3, 5, 6, 8, 10, 12, 15];
+function exStats(id) {
+  const rows = [];
+  S.sessions.slice().sort((a, b) => a.date.localeCompare(b.date) || (a.startedAt || '').localeCompare(b.startedAt || '')).forEach((s) => {
+    (s.exercises || []).filter((e) => e.exerciseId === id).forEach((e) => {
+      const ws = e.sets.filter(isWork).filter((x) => x.r > 0); if (ws.length) rows.push({ date: s.date, sets: ws });
+    });
+  });
+  const bodyweight = rows.length > 0 && !rows.some((r) => r.sets.some((x) => x.w > 0));
+  const metric = (x) => bodyweight ? x.r : e1rm(x.w, x.r);
+  let best = 0, bestInfo = null, maxW = null, bestVol = null, maxReps = null; const prs = [], byRep = {}, series = [], wSeries = [];
+  rows.forEach((r) => {
+    let sb = 0, sx = null, vol = 0, mw = 0;
+    r.sets.forEach((x) => {
+      const m = metric(x); if (m > sb) { sb = m; sx = x; }
+      vol += x.w * x.r; if (x.w > mw) mw = x.w;
+      if (!maxW || x.w > maxW.w || (x.w === maxW.w && x.r > maxW.r)) maxW = { w: x.w, r: x.r, date: r.date };
+      if (!maxReps || x.r > maxReps.r) maxReps = { r: x.r, w: x.w, date: r.date };
+      REPS.forEach((n) => { if (x.r >= n && x.w > 0) { const c = byRep[n]; if (!c || x.w > c.w || (x.w === c.w && x.r > c.r)) byRep[n] = { w: x.w, r: x.r, date: r.date }; } });
+    });
+    r.e1 = sb; r.vol = vol; r.best = sx; r.maxW = mw;
+    if (sb > best + 0.05) { prs.push({ date: r.date, v: sb, w: sx.w, r: sx.r, delta: best > 0 ? sb - best : null }); best = sb; bestInfo = { v: sb, w: sx.w, r: sx.r, date: r.date }; }
+    if (!bestVol || vol > bestVol.v) bestVol = { v: vol, date: r.date };
+    series.push({ x: r.date, y: r1(sb) }); wSeries.push({ x: r.date, y: mw });
+  });
+  return { rows: rows, sessions: rows.length, bodyweight: bodyweight, best: bestInfo, maxW: maxW, maxReps: maxReps, bestVol: bestVol, byRep: byRep, prs: prs.slice().reverse(), series: series, wSeries: wSeries, lastDate: rows.length ? rows[rows.length - 1].date : null };
+}
+
+/* ---------- ficha del ejercicio ---------- */
+function exDetailBody(id) {
+  const e = exById(id); if (!e) return emptyBox('No encontrado', 'Este ejercicio ya no existe.');
+  const st = exStats(id), d = exDef(id), unit = st.bodyweight ? ' reps' : ' kg';
+  let h = '<div style="padding:0 16px 14px"><h2 style="font-size:26px;line-height:1.15;margin:0 0 4px">' + esc(e.name) + (e.favorite ? ' <span style="color:var(--orange)">★</span>' : '') + '</h2><div class="sub" style="margin:0">' +
+    esc([e.muscle].concat((e.secondary || []).length ? ['también ' + e.secondary.join(', ')] : [], e.equipment ? [e.equipment] : []).join(' · ')) + (e.archived ? ' · <b>Archivado</b>' : '') + '</div></div>';
+  if (st.sessions) {
+    h += st.bodyweight ? tiles([['Máx. repeticiones', st.maxReps.r], ['Sesiones', st.sessions], ['Última vez', ago(st.lastDate).replace('hace ', '')]])
+      : tiles([['Mejor 1RM estimado', st.best ? f1(st.best.v) : '—'], ['Peso máximo', f1(st.maxW.w)], ['Sesiones', st.sessions]]);
+    const reps = REPS.filter((n) => st.byRep[n]);
+    if (!st.bodyweight && reps.length) h += sec('Mejor peso por repeticiones', reps.map((n) => { const x = st.byRep[n]; return '<div class="rec"><div><b>' + n + (n === 1 ? ' repetición' : ' repeticiones') + '</b><small>' + shortD(x.date) + (x.r > n ? ' · hizo ' + x.r : '') + '</small></div><div class="v">' + f1(x.w) + '<small>kg</small></div></div>'; }).join(''), 'Con cuántas repeticiones, como mínimo, levantaste ese peso. Solo series efectivas.');
+    if (st.prs.length) h += sec('Récords rotos', st.prs.slice(0, 8).map((p) => '<div class="rec"><div><b>' + shortD(p.date) + '</b><small>' + (st.bodyweight ? p.r + ' reps' : f1(p.w) + ' kg × ' + p.r) + '</small></div><div class="v">' + f1(p.v) + '<small>' + (st.bodyweight ? 'reps' : 'e1RM') + (p.delta ? ' +' + f1(p.delta) : '') + '</small></div></div>').join(''), st.prs.length > 8 ? 'Se muestran los 8 más recientes.' : '');
+    if (st.series.length > 1) h += sec(st.bodyweight ? 'Repeticiones por sesión' : '1RM estimado (kg)', '<div class="pad">' + lineChart(st.series, { label: 'Progreso de ' + e.name }) + '</div>');
+    if (!st.bodyweight && st.wSeries.length > 1) h += sec('Peso máximo por sesión (kg)', '<div class="pad">' + lineChart(st.wSeries, { label: 'Peso máximo' }) + '</div>');
+    if (st.bestVol && !st.bodyweight) h += sec('', '<div class="rec"><div><b>Mejor volumen en una sesión</b><small>' + shortD(st.bestVol.date) + '</small></div><div class="v">' + Math.round(st.bestVol.v).toLocaleString('es-MX') + '<small>kg</small></div></div>');
+  } else h += '<p class="muted" style="margin:0 16px 20px">Aún no has registrado este ejercicio. Cuando lo hagas verás aquí tus récords y tu progreso.</p>';
+  h += sec('Ficha', li('Rango de repeticiones', { v: d.min + '–' + d.max }) + li('Descanso sugerido', { v: fmtRest(d.rest) }) + li('Series sugeridas', { v: d.sets }) +
+    '<button class="li" data-act="exFav"><span class="t">' + (e.favorite ? '★ Quitar de favoritos' : '☆ Marcar como favorito') + '</span></button>');
+  const tip = e.howTo || (catById(id) || {}).tip;
+  if (tip) h += sec('Cómo hacerlo', '<div class="pad">' + esc(tip) + '</div>');
+  if (e.note) h += sec('Mi nota', '<div class="pad">' + esc(e.note) + '</div>');
+  if (st.sessions) {
+    h += '<section class="sec"><div class="h"><span>Historial</span></div><div class="group tbl"><table><thead><tr><th>Fecha</th><th>Series (kg×reps @RIR)</th><th>' + (st.bodyweight ? 'Reps' : 'e1RM') + '</th><th>Vol.</th></tr></thead><tbody>' +
+      st.rows.slice().reverse().slice(0, 12).map((r) => '<tr><td>' + fmtDate(r.date) + '</td><td>' + r.sets.map((x) => f1(x.w) + '×' + x.r + (x.rir != null ? '@' + x.rir : '')).join('  ') + '</td><td>' + f1(r.e1) + '</td><td>' + Math.round(r.vol) + '</td></tr>').join('') + '</tbody></table></div></section>';
+  }
+  h += sec('', li(e.archived ? 'Restaurar ejercicio' : 'Archivar ejercicio', { red: !e.archived, blue: e.archived, d: { act: 'exArchive' } }), e.archived ? '' : 'Archivar lo oculta de las listas y del selector, pero conserva todo su historial y sus récords.');
+  return h;
+}
+function exDetail(id) {
+  const o = openSheet({ title: 'Ejercicio', left: 'Cerrar', right: 'Editar', body: () => exDetailBody(id), ok: () => { const e = exById(id); if (e) exSheet(e); } });
+  o.exId = id; o.live = true; return o;
+}
+
+/* ---------- biblioteca ---------- */
+const catToEx = (c) => ({ id: c.id, name: c.name, muscle: c.muscle, secondary: c.secondary, equipment: c.equipment, note: '', repMin: c.repMin, repMax: c.repMax, restSec: c.restSec, howTo: c.tip });
+function catalogSheet(opts) {
+  opts = opts || {}; const cs = { mus: 'Todos' };
+  const o = openSheet({
+    title: 'Biblioteca', left: 'Cerrar',
+    body: () => {
+      const have = new Set(S.exercises.map((e) => e.id)), C = window.CATALOG || [], mus = cs.mus;
+      const list = C.filter((c) => mus === 'Todos' || c.muscle === mus), pend = list.filter((c) => !have.has(c.id));
+      let h = sec('', '<label class="li"><span class="t">Buscar</span><input id="catQ" data-lf=".cr" placeholder="Nombre, músculo o equipo" autocomplete="off" style="text-align:left"></label>');
+      h += '<div class="chips">' + ['Todos'].concat(MUSCLES.filter((m) => C.some((c) => c.muscle === m))).map((m) => '<button class="chip ' + (mus === m ? 'on' : '') + '" data-act="catMus" data-v="' + esc(m) + '">' + esc(m) + '</button>').join('') + '</div>';
+      if (mus !== 'Todos' && pend.length) h += sec('', li('Agregar los ' + pend.length + ' que faltan de ' + mus, { blue: 1, d: { act: 'catAddAll' } }));
+      h += '<section class="sec" data-fg><div class="group">' + list.map((c) => '<div class="li cr" data-n="' + esc(norm(c.name + ' ' + c.muscle + ' ' + (c.equipment || ''))) + '"><span class="t">' + esc(c.name) + '<small>' + esc([c.muscle, c.equipment, c.repMin + '–' + c.repMax].join(' · ')) + '</small><small>' + esc(c.tip) + '</small></span>' +
+        (have.has(c.id) ? '<span class="tag g">En tu biblioteca</span>' : '<button class="btn sm" data-act="catAdd" data-id="' + esc(c.id) + '">Agregar</button>') + '</div>').join('') + '</div></section>';
+      return h + '<p class="muted small" style="margin:-8px 16px 0">' + C.length + ' ejercicios en la biblioteca. ¿Falta alguno? En Ejercicios usa «Pedir a Claude» o créalo con «Nuevo».</p>';
+    }
+  });
+  o.cs = cs; o.onAdd = opts.onAdd;
+  if (opts.q) { LFS.catQ = opts.q; drawSheet(o); }
+  return o;
+}
+
 /* ---------- navegación y dibujo ---------- */
 const TABS = [['train', 'Entrenar', IC.train], ['history', 'Progreso', IC.history], ['body', 'Cuerpo', IC.body], ['coach', 'Entrenador', IC.coach], ['more', 'Más', IC.more]];
 function current() {
@@ -838,7 +1094,7 @@ function current() {
   if (view === 'coach') return vCoach();
   return vMore();
 }
-function go(v) { view = v; if (v !== 'more') moreSub = null; render(); window.scrollTo(0, 0); }
+function go(v) { resetLF(); view = v; if (v !== 'more') moreSub = null; render(); window.scrollTo(0, 0); }
 function closeAllSheets() { while (sheets.length) closeSheet(); document.querySelectorAll('.as-back').forEach((e) => e.remove()); }
 function updateNav() { $('#nav').classList.toggle('scrolled', window.scrollY > 34); }
 function render() {
@@ -848,14 +1104,14 @@ function render() {
   $('#navL').innerHTML = r.left || ''; $('#navT').textContent = r.small || r.title; $('#navR').innerHTML = r.right || '';
   page.innerHTML = '<h1 class="large">' + esc(r.title) + '</h1>' + syncBanner() + r.html;
   $('#tabs').innerHTML = TABS.map((t) => '<button class="tab ' + (t[0] === view ? 'on' : '') + '" data-act="tab" data-v="' + t[0] + '" ' + (t[0] === view ? 'aria-current="page"' : '') + '>' + t[2] + '<span>' + t[1] + '</span>' + (t[0] === 'train' && draft ? '<i class="dot"></i>' : '') + '</button>').join('');
-  tickPill(); window.scrollTo(0, y); updateNav();
+  tickPill(); window.scrollTo(0, y); updateNav(); syncNavLayers(); restoreLF(page);
 }
 const typing = () => { const a = document.activeElement; return !!a && a !== document.body && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && $('#page').contains(a); };
 let dirty = false;
 function onDataChange() {
   if (!authed) return;
-  if (typing()) { dirty = true; return; }
-  render(); sheets.forEach((o) => { if (o.live && !(document.activeElement && o.el.contains(document.activeElement))) drawSheet(o); });
+  if (typing() || drag) { dirty = true; return; }
+  render(); sheets.forEach((o) => { const a = document.activeElement; if (o.live && !(a && o.el.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) drawSheet(o); });
 }
 document.addEventListener('focusout', () => { if (dirty) setTimeout(() => { if (!typing()) { dirty = false; render(); } }, 80); });
 window.addEventListener('scroll', updateNav, { passive: true });
@@ -939,14 +1195,16 @@ ACT.setMenu = (el) => {
 ACT.exMenu = (el) => {
   const ei = +el.dataset.ei, en = draft.exercises[ei], anyDone = en.sets.some((s) => s.done);
   actionSheet(en.name, [
-    { label: 'Reemplazar ejercicio', fn: () => { if (anyDone) { toast('Ya hay series hechas. Quita el ejercicio o agrega otro.'); return; } pickEx((id) => { draft.exercises[ei] = newEntry(id, { sets: en.sets.length, repMin: en.repMin, repMax: en.repMax, restSec: en.restSec }); saveDraft(true); render(); }, 'Reemplazar por'); } },
+    { label: 'Reemplazar ejercicio', fn: () => { if (anyDone) { toast('Ya hay series hechas. Quita el ejercicio o agrega otro.'); return; } pickEx((id) => { draft.exercises[ei] = newEntry(id, { sets: en.sets.length }); saveDraft(true); render(); }, 'Reemplazar por'); } },
+    { label: 'Ver historial y récords', fn: () => exDetail(en.exerciseId) },
+    { label: 'Cambiar rango de repeticiones', fn: () => actionSheet('Rango de repeticiones de hoy', [[4, 6], [5, 8], [6, 10], [8, 12], [10, 15], [12, 20], [15, 25]].map((r) => ({ label: (en.repMin === r[0] && en.repMax === r[1] ? '✓ ' : '') + r[0] + '–' + r[1] + ' reps', fn: () => { en.repMin = r[0]; en.repMax = r[1]; saveDraft(true); render(); } }))) },
     { label: 'Subir', fn: () => { if (ei > 0) { const t = draft.exercises[ei]; draft.exercises[ei] = draft.exercises[ei - 1]; draft.exercises[ei - 1] = t; saveDraft(true); render(); } } },
     { label: 'Bajar', fn: () => { if (ei < draft.exercises.length - 1) { const t = draft.exercises[ei]; draft.exercises[ei] = draft.exercises[ei + 1]; draft.exercises[ei + 1] = t; saveDraft(true); render(); } } },
     { label: 'Quitar ejercicio', red: true, fn: () => { const rm = () => { draft.exercises.splice(ei, 1); saveDraft(true); render(); }; if (anyDone) confirmAct('Se quitarán también sus series hechas.', 'Quitar ejercicio', rm); else rm(); } }
   ]);
 };
 ACT.addEx = () => {
-  pickEx((id) => { draft.exercises.push(newEntry(id, { sets: 3, repMin: 8, repMax: 12 })); saveDraft(true); render(); const c = document.querySelectorAll('.xcard'); if (c.length) c[c.length - 1].scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 'Agregar ejercicio');
+  pickEx((id) => { draft.exercises.push(newEntry(id, {})); saveDraft(true); render(); const c = document.querySelectorAll('.xcard'); if (c.length) c[c.length - 1].scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 'Agregar ejercicio');
 };
 ACT.restPick = (el) => { const en = entry(el); actionSheet('Descanso objetivo', [45, 60, 90, 120, 150, 180, 240, 300].map((s) => ({ label: (en.restSec === s ? '✓ ' : '') + fmtRest(s), fn: () => { en.restSec = s; saveDraft(true); render(); } }))); };
 ACT.restAdd = () => { restUntil = Math.max(restUntil, Date.now()) + 15000; buzzed = false; tickPill(); };
@@ -964,7 +1222,51 @@ ACT.planApply = () => {
   if (n) { closeSheet(topSheet()); render(); toast('Plan aplicado a ' + plural(n, 'ejercicio', 'ejercicios') + '. Los números azules son la propuesta.'); }
   else toast('No pude leer la respuesta. Pega solo el JSON que te dio Claude.');
 };
+ACT.schemaSql = () => schemaSheet();
+ACT.sqlCopy = () => { const o = topSheet(); if (o && o.copy) o.copy(o); };
 ACT.copyPrompt = () => { const o = topSheet(); if (o && o.copy) o.copy(o); };
+
+
+/* ejercicios, biblioteca y fichas */
+ACT.exDetail = (el) => exDetail(el.dataset.id);
+ACT.exFav = () => { const o = topSheet(), e = o && exById(o.exId); if (!e) return; D.saveExercise(Object.assign({}, e, { favorite: !e.favorite })); toast(e.favorite ? 'Quitado de favoritos' : 'Marcado como favorito'); };
+ACT.exArchive = () => {
+  const o = topSheet(), e = o && exById(o.exId); if (!e) return;
+  if (e.archived) { D.saveExercise(Object.assign({}, e, { archived: false })); toast('Ejercicio restaurado'); return; }
+  confirmAct('Se ocultará de las listas y del selector. Su historial y sus récords se conservan y podrás restaurarlo.', 'Archivar ejercicio', () => { D.saveExercise(Object.assign({}, e, { archived: true })); closeSheet(o); toast('Ejercicio archivado'); render(); });
+};
+ACT.exMus = (el) => { exMus = el.dataset.v; render(); };
+ACT.catOpen = () => catalogSheet();
+ACT.catMus = (el) => { const o = topSheet(); o.cs.mus = el.dataset.v; drawSheet(o); };
+ACT.catAdd = (el) => {
+  const c = catById(el.dataset.id), o = topSheet(); if (!c || exById(c.id)) return;
+  D.saveExercises([catToEx(c)]); toast(c.name + ' agregado');
+  if (o && o.onAdd) { closeSheet(o); o.onAdd(c.id); } else if (o) drawSheet(o);
+};
+ACT.catAddAll = () => {
+  const o = topSheet(), have = new Set(S.exercises.map((e) => e.id)), list = (window.CATALOG || []).filter((c) => (o.cs.mus === 'Todos' || c.muscle === o.cs.mus) && !have.has(c.id));
+  if (!list.length) return; D.saveExercises(list.map(catToEx)); toast(plural(list.length, 'ejercicio agregado', 'ejercicios agregados')); drawSheet(o);
+};
+ACT.pickCat = () => { const o = topSheet(); if (o && o.catalog) o.catalog(); };
+
+
+/* registrar con Claude */
+ACT.importFood = () => importSheet('food');
+ACT.importEx = () => importSheet('ex');
+ACT.impCopy = async () => {
+  const o = topSheet(); if (!o || !o.imp) return;
+  const t = importPrompt(o.imp.kind), ok = await copyText(t);
+  if (ok) { o.imp.copied = true; const b = $('[data-act=impCopy]', o.el); if (b) b.textContent = 'Copiado ✓'; toast('Copiado. Pégalo en un chat de Claude.'); }
+  else { closeSheet(o); promptSheet('Prompt', t, 'No pude copiarlo solo: mantén presionado el texto, selecciónalo todo y cópialo.'); }
+};
+ACT.impParse = () => {
+  const o = topSheet(); if (!o || !o.imp) return; const tx = $('#impIn', o.el), v = tx ? tx.value.trim() : '';
+  if (!v) { toast('Pega primero la respuesta de Claude.'); return; }
+  const P = parseImport(v); if (!P) { toast('No pude leer el JSON. Pega solo el bloque que te dio Claude.'); return; }
+  o.imp.parsed = P; o.imp.mode = 'add'; importDraw(o); const b = $('.sheet-b', o.el); if (b) b.scrollTop = 0;
+};
+ACT.impBack = () => { const o = topSheet(); if (!o || !o.imp) return; o.imp.parsed = null; importDraw(o); };
+ACT.impMode = (el) => { const o = topSheet(); if (!o || !o.imp) return; o.imp.mode = el.dataset.v; importDraw(o); };
 
 /* peso, medidas y comida */
 ACT.saveBwQuick = () => { const w = num(($('#bwq') || {}).value); if (w == null || w < 20 || w > 400) { toast('Escribe un peso válido en kg.'); return; } D.saveWeight(today(), w); toast('Peso guardado'); render(); };
@@ -974,7 +1276,7 @@ ACT.newMeas = () => measSheet(null);
 ACT.measMenu = (el) => { const m = S.measurements.find((x) => x.date === el.dataset.id); if (!m) return; actionSheet('Medición del ' + fmtDate(m.date), [{ label: 'Editar', fn: () => measSheet(m) }, { label: 'Borrar', red: true, fn: () => confirmAct('¿Borrar esta medición?', 'Borrar medición', () => { D.deleteMeasurement(m.date); render(); }) }]); };
 ACT.metric = (el) => { bodyMetric = el.dataset.v; render(); };
 ACT.bodyTab = (el) => { bodyTab = el.dataset.v; render(); };
-ACT.histTab = (el) => { histTab = el.dataset.v; render(); };
+ACT.histTab = (el) => { resetLF(); histTab = el.dataset.v; render(); };
 ACT.meal = (el) => { foodMeal = el.dataset.v; render(); };
 ACT.calDay = (el) => { calDay = el.dataset.v; render(); };
 ACT.calNav = (el) => { const p = calMonth.split('-').map(Number), d = new Date(p[0], p[1] - 1 + (+el.dataset.v), 1); calMonth = d.getFullYear() + '-' + pad(d.getMonth() + 1); render(); };
@@ -995,18 +1297,12 @@ ACT.preset = (el) => { const p = PRESETS[+el.dataset.i]; promptSheet(p[0], coach
 ACT.coachFree = () => { const q = (coachQ || '').trim(); if (!q) { toast('Escribe tu pregunta primero.'); return; } promptSheet('Tu pregunta', coachPrompt(q), 'Cópialo y pégalo en un chat de Claude (o en tu agente).'); };
 
 /* más */
-ACT.moreGo = (el) => { moreSub = el.dataset.v; render(); window.scrollTo(0, 0); };
-ACT.moreBack = () => { moreSub = null; render(); window.scrollTo(0, 0); };
+ACT.moreGo = (el) => { resetLF(); moreSub = el.dataset.v; render(); window.scrollTo(0, 0); };
+ACT.moreBack = () => { resetLF(); moreSub = null; render(); window.scrollTo(0, 0); };
 ACT.newTpl = () => tplSheet(null);
 ACT.tplEdit = (el) => { const t = S.templates.find((x) => x.id === el.dataset.id); if (t) tplSheet(t); };
-ACT.tplMove = (el) => {
-  const list = S.templates.slice(), i = list.findIndex((x) => x.id === el.dataset.id), j = i + (+el.dataset.d); if (i < 0 || j < 0 || j >= list.length) return;
-  const t = list[i]; list[i] = list[j]; list[j] = t; D.reorderTemplates(list); render();
-};
-ACT.tplUp = (el) => { const i = +el.dataset.i, a = tplEdit.items; if (i > 0) { const t = a[i]; a[i] = a[i - 1]; a[i - 1] = t; drawSheet(tplO); } };
-ACT.tplDn = (el) => { const i = +el.dataset.i, a = tplEdit.items; if (i < a.length - 1) { const t = a[i]; a[i] = a[i + 1]; a[i + 1] = t; drawSheet(tplO); } };
 ACT.tplRm = (el) => { tplEdit.items.splice(+el.dataset.i, 1); drawSheet(tplO); };
-ACT.tplAddEx = () => pickEx((id) => { tplEdit.items.push({ exerciseId: id, sets: 3, repMin: 8, repMax: 12 }); drawSheet(tplO); });
+ACT.tplAddEx = () => pickEx((id) => { const d = exDef(id); tplEdit.items.push({ exerciseId: id, sets: d.sets, repMin: d.min, repMax: d.max }); drawSheet(tplO); });
 ACT.tplDelete = () => { const id = tplEdit.id; confirmAct('¿Eliminar esta rutina? Tus sesiones ya registradas no se borran.', 'Eliminar rutina', () => { D.deleteTemplate(id); closeSheet(tplO); toast('Rutina eliminada'); render(); }); };
 ACT.pickPick = (el) => { const o = topSheet(); if (o && o.pick) o.pick(el.dataset.id); };
 ACT.pickNew = () => { const o = topSheet(); if (o && o.nuevo) o.nuevo(); };
@@ -1029,25 +1325,101 @@ document.addEventListener('click', (e) => {
   const h = ACT[el.dataset.act]; if (h) h(el, e);
 });
 
+
+/* ---------- botón «atrás» ---------- */
+let exitArm = 0, navReady = false;
+const navLayerTab = { close: () => { view = 'train'; moreSub = null; render(); window.scrollTo(0, 0); } };
+const navLayerMore = { close: () => { moreSub = null; render(); window.scrollTo(0, 0); } };
+/* Mantiene en `layers` las capas de navegación que corresponden a la pantalla actual. */
+function syncNavLayers() {
+  layerDel(navLayerTab); layerDel(navLayerMore);
+  if (view === 'more' && moreSub) layers.unshift(navLayerMore);
+  if (view !== 'train') layers.unshift(navLayerTab);
+}
+function armHistory() {
+  if (navReady) return; navReady = true;
+  try { history.replaceState({ bh: 0 }, ''); history.pushState({ bh: 1 }, ''); } catch (e) {}
+}
+['pointerdown', 'keydown', 'touchstart'].forEach((ev) => document.addEventListener(ev, armHistory, { once: true, passive: true }));
+window.addEventListener('popstate', () => {
+  if (!navReady) return;
+  const l = layers[layers.length - 1];
+  if (l) { l.close(); try { history.pushState({ bh: 1 }, ''); } catch (e) {} return; }
+  if (authed && Date.now() - exitArm > 2500) { exitArm = Date.now(); toast('Desliza atrás otra vez para salir'); try { history.pushState({ bh: 1 }, ''); } catch (e) {} return; }
+  exitArm = 0; try { history.back(); } catch (e) {}
+});
+
+/* ---------- arrastrar para reordenar (mantén presionado el asa) ---------- */
+let drag = null;
+const moveItem = (a, from, to) => { const x = a.splice(from, 1)[0]; a.splice(to, 0, x); };
+document.addEventListener('pointerdown', (e) => {
+  const g = e.target.closest ? e.target.closest('.grip') : null; if (!g || drag) return;
+  const item = g.closest('[data-di]'); if (!item) return;
+  e.preventDefault();
+  const kind = item.dataset.di, parent = item.parentElement, compact = kind === 'sess', sc = item.closest('.sheet-b');
+  if (compact) $('#page').classList.add('compact');
+  const items = [].slice.call(parent.children).filter((c) => c.dataset.di === kind);
+  const s0 = sc ? sc.scrollTop : window.scrollY, rects = items.map((c) => c.getBoundingClientRect()), from = items.indexOf(item), h = rects[from].height;
+  const gap = items.length > 1 ? (from < items.length - 1 ? rects[from + 1].top - rects[from].bottom : rects[from].top - rects[from - 1].bottom) : 0;
+  drag = { g: g, item: item, items: items, sc: sc, kind: kind, from: from, to: from, y0: e.clientY, cy: e.clientY, s0: s0, pid: e.pointerId,
+    ctr: rects.map((r) => r.top + s0 + r.height / 2), shift: h + gap, off: compact ? e.clientY - (rects[from].top + h / 2) : 0, top0: rects[from].top };
+  try { g.setPointerCapture(e.pointerId); } catch (x) {}
+  item.classList.add('dragging'); items.forEach((c) => { if (c !== item) c.classList.add('shifty'); });
+  document.body.classList.add('dragging-now');
+  try { navigator.vibrate && navigator.vibrate(8); } catch (x) {}
+  dragLoop();
+});
+document.addEventListener('pointermove', (e) => { if (drag && e.pointerId === drag.pid) { drag.cy = e.clientY; e.preventDefault(); } }, { passive: false });
+function dragLoop() {
+  const d = drag; if (!d) return;
+  const box = d.sc ? d.sc.getBoundingClientRect() : { top: 56, bottom: window.innerHeight - 60 };
+  let v = 0; const edge = 80;
+  if (d.cy < box.top + edge) v = -Math.ceil((box.top + edge - d.cy) / 5); else if (d.cy > box.bottom - edge) v = Math.ceil((d.cy - (box.bottom - edge)) / 5);
+  if (v) { v = Math.max(-20, Math.min(20, v)); if (d.sc) d.sc.scrollTop += v; else window.scrollBy(0, v); }
+  const sNow = d.sc ? d.sc.scrollTop : window.scrollY, dy = (d.cy - d.y0) + (sNow - d.s0) + d.off;
+  d.item.style.transform = 'translateY(' + dy + 'px)';
+  const mine = d.ctr[d.from] + dy - d.off * 0; let to = 0;
+  d.ctr.forEach((c, i) => { if (i !== d.from && c < mine) to++; });
+  d.to = to;
+  d.items.forEach((c, i) => {
+    if (i === d.from) return;
+    let t = 0; if (d.from < to && i > d.from && i <= to) t = -d.shift; else if (d.from > to && i >= to && i < d.from) t = d.shift;
+    c.style.transform = t ? 'translateY(' + t + 'px)' : '';
+  });
+  d.raf = requestAnimationFrame(dragLoop);
+}
+function dragEnd(e) {
+  const d = drag; if (!d || (e && e.pointerId !== d.pid)) return;
+  drag = null; cancelAnimationFrame(d.raf);
+  d.items.forEach((c) => { c.style.transform = ''; c.classList.remove('shifty', 'dragging'); });
+  document.body.classList.remove('dragging-now'); $('#page').classList.remove('compact');
+  if (d.to === d.from) { render(); return; }
+  if (d.kind === 'sess' && draft) { moveItem(draft.exercises, d.from, d.to); saveDraft(true); render(); const c = document.querySelectorAll('.xcard')[d.to]; if (c) c.scrollIntoView({ block: 'center' }); }
+  else if (d.kind === 'tpl' && tplEdit) { moveItem(tplEdit.items, d.from, d.to); drawSheet(tplO); }
+  else if (d.kind === 'routine') { const list = S.templates.slice(); moveItem(list, d.from, d.to); D.reorderTemplates(list); render(); }
+}
+document.addEventListener('pointerup', dragEnd); document.addEventListener('pointercancel', dragEnd);
+document.addEventListener('contextmenu', (e) => { if (e.target.closest && e.target.closest('.grip')) e.preventDefault(); });
+
 /* ---------- campos ---------- */
 function bindSet(key, val) {
   if (key === 'coachQ') { coachQ = val; return; }
   const p = key.split(':'), ns = p[0], f = p[1];
   if (ns === 'sess' && draft) { if (f === 'date' && !val) return; draft[f] = val; saveDraft(); }
   else if (ns === 'tpl' && tplEdit) tplEdit[f] = val;
-  else if (ns === 'ex' || ns === 'meas') { const o = topSheet(); if (o && o.st) o.st[f] = val; }
+  else if (ns === 'ex' || ns === 'meas' || ns === 'cat') { const o = topSheet(); if (o && o.st) o.st[f] = val; }
 }
 document.addEventListener('input', (e) => {
   const t = e.target, d = t.dataset || {};
+  if (d.lf) { LFS[t.id] = t.value; applyLF(t); }
   if (d.f && draft) { const s = draft.exercises[+d.ei].sets[+d.si]; if (s) { s[d.f] = t.value; saveDraft(); } return; }
   if (d.bind) bindSet(d.bind, t.value);
   else if (d.tf && tplEdit) tplEdit.items[+d.i][d.tf] = t.value;
   else if (d.mf) { const o = topSheet(); if (o && o.st) o.st.vals[d.mf] = t.value; }
-  else if (t.id === 'pickQ') filterPick(t.value);
 });
 document.addEventListener('change', (e) => {
   const t = e.target, d = t.dataset || {};
-  if (d.bind) bindSet(d.bind, t.value);
+  if (d.bind) bindSet(d.bind, t.type === 'checkbox' ? t.checked : t.value);
   else if (d.sel === 'histEx') { histEx = t.value; render(); }
   else if (d.sel === 'fday') { foodDay = t.value || today(); render(); }
 });

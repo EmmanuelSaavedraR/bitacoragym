@@ -45,7 +45,7 @@ Guarda esa dirección: es tu app.
 1. Abre la dirección en **Safari** (tiene que ser Safari).
 2. Toca **Compartir** (cuadro con flecha) → **Añadir a pantalla de inicio** → **Añadir**.
 3. Ábrela desde el ícono. Inicia sesión una sola vez con el correo y la contraseña del paso 1.4.
-4. La primera vez, con la cuenta vacía, la app carga una biblioteca de 32 ejercicios y 4 rutinas (Torso A, Pierna A, Torso B, Pierna B). Edítalas en **Más → Rutinas / Ejercicios**.
+4. La primera vez, con la cuenta vacía, la app carga 32 ejercicios y 4 rutinas (Torso A, Pierna A, Torso B, Pierna B). Edítalas en **Más → Rutinas / Ejercicios**. En **Más → Ejercicios → Biblioteca** hay 120 ejercicios más para agregar con un toque.
 
 > En iOS la app instalada guarda sus datos aparte de Safari. Por eso conviene editar `config.js` (paso 2) antes de subirla: así no tienes que escribir la configuración en el teléfono.
 
@@ -61,22 +61,32 @@ Guarda esa dirección: es tu app.
 
 **Entrenador.** No hay IA integrada ni claves que configurar. La pestaña *Entrenador* prepara un prompt con tus últimas 12 semanas (sesiones, volumen por grupo, peso, medidas, comida y récords): lo copias y lo pegas en un chat de Claude o en tu agente. Dentro de una sesión, **Plan del entrenador** te da un prompt que pide la propuesta del día en JSON; pegas la respuesta y se llenan los pesos y repeticiones sugeridos (en azul).
 
+**Ejercicios y récords.** *Más → Ejercicios* tiene búsqueda, filtros por músculo, favoritos (★) y archivado. Cada ejercicio tiene una **ficha** con su 1RM estimado, el peso máximo, el **mejor peso por repeticiones** (1, 2, 3, 5, 6, 8, 10, 12 y 15), los récords rotos, gráficas y el historial; se abre desde la lista, desde *Progreso → Récords* y desde el historial. Cada ejercicio guarda su propio rango de repeticiones, descanso y series: al **reemplazar** un ejercicio en una sesión o rutina se usan los del nuevo. Al terminar una sesión, la app avisa si rompiste un récord.
+
+**Reordenar y botón atrás.** Los ejercicios y rutinas se reordenan **arrastrando el asa ⋮⋮**. El botón o gesto de atrás del teléfono cierra primero menús y hojas, luego regresa de subpantallas y pestañas; solo en la pantalla de inicio pide «atrás» una segunda vez para salir.
+
+**Registrar con Claude.** En *Cuerpo → Comida → Registrar con Claude*: copias un prompt (ya incluye la fecha, tus metas, lo que registraste hoy y tus alimentos frecuentes), lo pegas en un chat de Claude y le cuentas qué comiste, aunque sea en varias veces durante el día. Claude responde con un bloque JSON; lo pegas en la app, ves una **vista previa con totales** y confirmas. Si ese día ya tenías registros, eliges entre agregar o reemplazar el día. El mismo JSON puede traer tu peso. *Más → Ejercicios → Pedir a Claude* hace lo mismo para crear ejercicios nuevos (se omiten los que ya existen).
+
 **Tus datos y las gráficas externas.** Cada serie es una fila (`session_sets`). La vista **`series_flat`** de Supabase ya trae una fila por serie con fecha, ejercicio, kg, reps, RIR, e1RM y volumen: conéctala a Looker Studio, Metabase, Google Sheets (con un conector de PostgreSQL), Python, etc. También puedes exportar CSV desde **Más → Exportar datos**: se abre el menú de compartir de iOS (Archivos, Drive, Hojas de cálculo).
 
 **Respaldo.** *Más → Exportar datos → Respaldo completo (JSON)*, o los backups automáticos de Supabase.
 
 ## Actualizar la app
 
-Sustituye los archivos en tu servicio de alojamiento. La app instalada se actualiza sola: la próxima vez que la abras ya tiene la versión nueva (si no, ciérrala por completo y ábrela otra vez). Si cambias archivos, sube también el número de `CACHE` en `sw.js` (por ejemplo `bitacora-v2`).
+Si ya tenías la base de datos creada antes de esta versión, ejecuta **una sola vez** `migracion-2.sql` (Supabase → SQL Editor → New query → Run). Si no lo haces, la app te lo recuerda con un aviso azul y te muestra el SQL con un botón «Copiar SQL» (también en *Más → Cuenta*). Mientras tanto todo funciona; solo no se guardan en tu base los rangos propios, favoritos y notas de técnica.
+
+Sustituye los archivos en tu servicio de alojamiento. La app instalada se actualiza sola: la próxima vez que la abras ya tiene la versión nueva (si no, ciérrala por completo y ábrela otra vez). Si cambias archivos, sube también el número de `CACHE` en `sw.js` (por ejemplo `bitacora-v3`).
 
 ## Contenido de la carpeta
 
 | Archivo | Para qué sirve |
 |---|---|
 | `index.html`, `styles.css`, `app.js` | La interfaz |
+| `catalog.js` | Biblioteca de 120 ejercicios con rango, descanso y técnica |
 | `data.js` | Base de datos local, cola sin conexión y sincronización con Supabase |
 | `config.js` | **Lo único que debes editar**: URL y clave de Supabase |
 | `schema.sql` | Tablas, seguridad por fila y la vista `series_flat` |
+| `migracion-2.sql` | Solo si ya tenías la base: agrega las columnas nuevas de ejercicios |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Instalación y funcionamiento sin conexión |
 | `vendor/supabase.js` | Librería oficial de Supabase (copia local) |
 

@@ -18,10 +18,29 @@ create table if not exists public.exercises (
   secondary  text[] not null default '{}',   -- músculos secundarios (cuentan 0.5 serie)
   equipment  text,
   note       text not null default '',
+  rep_min    int,                              -- rango de repeticiones propio del ejercicio
+  rep_max    int,
+  rest_sec   int,                              -- descanso sugerido (segundos)
+  default_sets int,                            -- series sugeridas
+  how_to     text not null default '',         -- indicaciones de técnica
+  favorite   boolean not null default false,
+  archived   boolean not null default false,   -- oculto en listas, conserva el historial
+  image_url  text,                             -- reservado para imágenes
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (user_id, id)
 );
+
+-- Si tu tabla de ejercicios ya existía (versión anterior), esto agrega las columnas nuevas.
+alter table public.exercises
+  add column if not exists rep_min int,
+  add column if not exists rep_max int,
+  add column if not exists rest_sec int,
+  add column if not exists default_sets int,
+  add column if not exists how_to text not null default '',
+  add column if not exists favorite boolean not null default false,
+  add column if not exists archived boolean not null default false,
+  add column if not exists image_url text;
 
 -- Rutinas en rotación. position define el orden de la rotación.
 create table if not exists public.templates (
@@ -192,3 +211,6 @@ from public.sessions s
 join public.session_sets ss
   on ss.session_id = s.id and ss.user_id = s.user_id
 where s.deleted_at is null;
+
+-- Actualiza la caché de la API para que reconozca las columnas nuevas.
+notify pgrst, 'reload schema';
