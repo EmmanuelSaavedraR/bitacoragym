@@ -1,6 +1,6 @@
 /* Service worker: la app abre sin internet y se actualiza sola.
    Estrategia: devuelve lo guardado al instante y refresca en segundo plano. */
-const CACHE = 'bitacora-v2';
+const CACHE = 'bitacora-v3';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'data.js', 'catalog.js', 'config.js', 'vendor/supabase.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => Promise.all(SHELL.map((u) => c.add(new Request(u, { cache: 'reload' })).catch(() => {})))).then(() => self.skipWaiting()));
