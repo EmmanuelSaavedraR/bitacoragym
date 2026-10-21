@@ -238,12 +238,22 @@
     var cfg = D.config();
     if (!cfg) return 'setup';
     if (!window.supabase || !window.supabase.createClient) return 'nolib';
-    D.client = window.supabase.createClient(cfg.url, cfg.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
+    /* toda petición a Supabase se corta a los 20 s: una base pausada o una señal mala no deben dejar la app colgada */
+    var tfetch = function (url, opts) {
+      var c = new AbortController(), t = setTimeout(function () { c.abort(); }, 20000); opts = Object.assign({}, opts);
+      if (opts.signal && opts.signal.addEventListener) opts.signal.addEventListener('abort', function () { c.abort(); });
+      opts.signal = c.signal;
+      return fetch(url, opts).then(function (r) { clearTimeout(t); return r; }, function (e) { clearTimeout(t); throw e; });
+    };
+    D.client = window.supabase.createClient(cfg.url, cfg.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }, global: { fetch: tfetch } });
     D.client.auth.onAuthStateChange(function (ev) { if (ev === 'SIGNED_OUT') { D.user = null; D.onAuth(false); } });
-    var user = null;
-    try { var r = await D.client.auth.getSession(); user = r && r.data && r.data.session ? r.data.session.user : null; } catch (e) {}
-    if (!user) { // sin red: usar la última cuenta conocida para poder consultar
-      try { var cu = JSON.parse(lsGet('bh.user') || 'null'); if (cu && !navigator.onLine) user = cu; } catch (e) {}
+    var user = null, timedOut = false;
+    try {
+      var r = await Promise.race([D.client.auth.getSession(), new Promise(function (res) { setTimeout(function () { timedOut = true; res(null); }, 6000); })]);
+      user = r && r.data && r.data.session ? r.data.session.user : null;
+    } catch (e) {}
+    if (!user) { // sin red o sin respuesta: usar la última cuenta conocida para poder consultar lo guardado en el teléfono
+      try { var cu = JSON.parse(lsGet('bh.user') || 'null'); if (cu && (!navigator.onLine || timedOut)) { user = cu; D.online = false; D.lastError = 'Sin conexión'; } } catch (e) {}
     }
     if (!user) return 'login';
     D.user = { id: user.id, email: user.email }; lsSet('bh.user', JSON.stringify(D.user));

@@ -25,6 +25,26 @@
 <div id="mini" class="minibar" hidden role="timer"></div>
 <div id="layer"></div>
 <div id="toast" class="toast" hidden role="status"></div>
+<script>
+/* Si la app no arranca en 12 s, muestra opciones para reintentar o reparar (no depende de app.js) */
+window.__bhErrs = [];
+window.addEventListener('error', function (e) { window.__bhErrs.push((e.message || 'error') + ' · ' + String(e.filename || '').split('/').pop() + ':' + (e.lineno || '')); });
+window.addEventListener('unhandledrejection', function (e) { window.__bhErrs.push('promesa: ' + ((e.reason && e.reason.message) || e.reason)); });
+window.__bhRepair = function () {
+  var done = function () { location.reload(); }, p = [];
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) p.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
+    if (window.caches && caches.keys) p.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+    Promise.all(p).then(done, done);
+  } catch (e) { done(); }
+};
+window.__bhStuck = function (title, detail) {
+  var pg = document.getElementById('page'); if (!pg) return;
+  pg.innerHTML = '<div class="stuck"><b>' + title + '</b><p>' + detail + '</p><button class="btn" onclick="location.reload()">Reintentar</button><button class="btn gray" onclick="__bhRepair()">Reparar y recargar</button><small></small></div>';
+  pg.querySelector('small').textContent = (window.__bhErrs || []).slice(-3).join(' | ');
+};
+setTimeout(function () { if (document.querySelector('#page .spin')) window.__bhStuck('Está tardando más de lo normal', 'Puede ser mala señal, una versión vieja guardada en el teléfono o que tu proyecto de Supabase esté pausado (entra a supabase.com y mira si dice «Paused»). «Reparar y recargar» borra solo la copia de la app, no tus datos.'); }, 12000);
+</script>
 <script src="config.js"></script>
 <script src="vendor/supabase.js"></script>
 <script src="catalog.js"></script>
