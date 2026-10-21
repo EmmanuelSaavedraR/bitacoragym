@@ -1668,7 +1668,7 @@ async function boot() {
   $('#page').innerHTML = '<div class="spin" aria-label="Cargando"></div>';
   let st = 'login'; try { st = await D.init(); } catch (e) { console.error(e); }
   if (st === 'setup' || st === 'nolib' || st === 'login') return renderAuth(st);
-  afterLogin();
+  try { await afterLogin(); } catch (e) { console.error(e); if (window.__bhErrs) window.__bhErrs.push(String((e && e.message) || e)); if (window.__bhStuck) window.__bhStuck('Algo salió mal al abrir la app', 'Intenta «Reparar y recargar»: borra solo la copia de la app guardada en el teléfono, no tus datos.'); }
 }
 if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
 boot();

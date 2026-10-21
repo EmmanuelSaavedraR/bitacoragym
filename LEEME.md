@@ -102,3 +102,8 @@ Sustituye los archivos en tu servicio de alojamiento. La app instalada se actual
 - **La pantalla pide “Conectar con Supabase”**: `config.js` aún tiene los valores de ejemplo.
 - **“Un cambio no se pudo guardar”**: casi siempre es que `schema.sql` no se ejecutó completo. Vuelve a correrlo; el detalle del error está en *Más → Cuenta y sincronización*.
 - **No aparece “Añadir a pantalla de inicio”**: ábrela en Safari (no dentro de otra app) y desde una dirección **https**.
+
+## Si la app se queda en el círculo de carga
+- A los 12 s sin arrancar aparece un aviso con **Reintentar** y **Reparar y recargar** (borra solo la copia de la app guardada en el teléfono; tus datos no se tocan).
+- Si Supabase no responde en 6 s, la app abre con los datos guardados en el teléfono y sincroniza cuando haya conexión. Toda petición a Supabase se corta a los 20 s.
+- Revisa en supabase.com que tu proyecto no diga **Paused** (los proyectos gratis se pausan tras ~7 días sin uso): toca **Restore project**.

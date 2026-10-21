@@ -354,3 +354,10 @@ body.dragging-now{user-select:none;-webkit-user-select:none;cursor:grabbing}
 .qs-ok{height:44px;border-radius:10px;background:var(--green);color:#fff;font-weight:700;font-size:16px}
 .mn-rest .mn-rtb{display:flex;align-items:center;gap:6px;background:none;padding:0 4px;height:36px;min-width:0;color:inherit}
 .xh .fld{color:var(--green)}
+
+/* pantalla cuando la app no arranca */
+.stuck{padding:64px 28px 0;text-align:center;display:grid;gap:10px;justify-items:center}
+.stuck b{font-size:20px}
+.stuck p{margin:0 0 6px;color:var(--label2);font-size:15px;line-height:1.4}
+.stuck .btn{width:100%;max-width:320px}
+.stuck small{color:var(--label3);font-size:12px;word-break:break-word;max-width:320px}
